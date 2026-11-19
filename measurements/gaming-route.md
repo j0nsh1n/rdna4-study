@@ -1083,6 +1083,20 @@ named where its notes record them. Each item answers or narrows an open point of
   per arm, busy-sample clock about 2.97 GHz, overclocked "Default" profile; MEASURED (upscaler)). This is the D3D12
   counterpart of the masked-address result for HIP in `compiler-and-hazards.md`. Open: in other kernels Mesa did not
   merge masked 8- or 16-byte loads (the Swin kernels', round 1 of that work); why is not known.
+- **`m2_net_12` (the persistent bottleneck kernel) at the register step too** (G1b, G4): under ACO it was allocated
+  256 VGPRs (5 waves per SIMD). Its peak was not one spot: in the fused patch-merge phase every 16-read fragment batch
+  sat on 172-190 live registers, and the attention part had one spot at 193 (`ACO_DEBUG=liveinfo`, READ). Two
+  load-order changes in the upscaler (fragments read inside the K loop; the second weight stripe's loads made to depend
+  on the first merge pass through an address term that is zero at run time, so ACO cannot hoist them, and smaller
+  fragment batches) bring it to 192 VGPRs and 8 waves, with no arithmetic changed: 487.2 -> 407.7 us, model 2's summed
+  GPU dispatch time per frame 2609.6 -> 2499.9 us (-4.2 %), byte-identical output (MEASURED (upscaler), one runtime
+  DLL, only that kernel's code swapped, busy-sample clock 3.05-3.09 GHz, overclocked "Default" profile). A source-level
+  move of the loads alone did not help: ACO hoisted them back (READ, listings).
+- **`m2_post_c` sits at the occupancy knee, unlike `m1_out_c`** (G1 continued): variants that overlap its two history
+  candidates need 132-144 VGPRs against 84 and ran 27-29 % slower (MEASURED (upscaler), byte-identical, interleaved,
+  overclocked profile). So for this kernel the lost waves cost more than the hidden latency gains; the occupancy curve
+  of `m1_out_c` (flat from 9 to 8 waves) does not carry over. A one-step-ahead touch of the next history rows was
+  2.6 % slower on the synthetic case, whose motion is random (INFERRED: a real game's smaller motion could differ).
 - **GE-Proton 11-12** (pair A's row): its own vkd3d-proton creates exactly the same kernels as 11-11's: 42 of the
   upscaler's 157 compute kernels; 85 are refused with `0x80070057` and 30 crash the process (on both). MEASURED (upscaler), `pso_sweep` per kernel, system wine 11.21, only the D3D12 pair changed per arm.
   Pair 1 creates 155 of 157 (two reference-route kernels crash dxil-spirv on every pair).

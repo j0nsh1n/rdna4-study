@@ -18,7 +18,7 @@ runs it (the user plans to switch this thread to Fable) to settle with the user.
 - llama.cpp master `f477c1b90`, built for gfx1201 into `build-gfx1201/` of both
   `rdna3-fp8/build/llama.cpp-latest` (unmodified) and `rdna3-fp8/build/llama.cpp-latest-patched` (our RDNA 3 patch).
   See the build result at the end of this file.
-- Models: `rdna3-fp8/models` links to `/var/mnt/games/LLM_Models/rdna3-fp8` (3B and 8B: FP8, FP8 with Q8_0 output
+- Models: `rdna3-fp8/models` links to a model folder on another disk (3B and 8B: FP8, FP8 with Q8_0 output
   layer, Q8_0; the 8B HF checkpoint).
 - RDNA 3 baseline on the same llama.cpp master, for cross-card comparison: `rdna3-fp8/build/latest-runs/`
   (script `rdna3-fp8/build/test-latest.sh`). The full RDNA 3 numbers are in `rdna3-fp8/README.md`.

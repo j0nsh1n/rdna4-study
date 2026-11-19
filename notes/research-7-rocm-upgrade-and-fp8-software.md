@@ -2,7 +2,7 @@
 
 Date: 2026-11-16. Reading only. Gathered by a Sonnet helper (child thread "RDNA 4 deep research: ROCm upgrade and FP8
 software paths"); items marked CHECKED were re-read by the lead. READ = stated in the source, seen by the helper
-only. INFERRED = reasoning. This machine: Nobara 44 (Fedora 44 base), kernel 7.3, ROCm 7.1.1 from Fedora packages,
+only. INFERRED = reasoning. This machine: a Fedora 44-based distribution, kernel 7.3, ROCm 7.1.1 from Fedora packages,
 PyTorch 2.13.0+rocm7.1 in a virtual environment.
 
 ## A. Upgrading ROCm (to do after the card swap; owner decision 2026-11-16)
@@ -27,7 +27,7 @@ PyTorch 2.13.0+rocm7.1 in a virtual environment.
   driver package (DKMS) for Radeon cards; the driver built into a newer kernel is not a documented path, though it
   is what Fedora uses.
 
-### Routes on Fedora 44 / Nobara
+### Routes on Fedora 44
 
 | Route | What it is | Notes |
 |---|---|---|
@@ -44,7 +44,7 @@ sanity-tested and release-ready.
 - INFERRED recommendation, for the owner to decide after the swap: the tarball or pip route into the project's own
   folder, keeping Fedora's 7.1.1 installed. That keeps the RDNA 3 baseline reproducible and makes the upgrade
   reversible. Measure with 7.1.1 first, then with 10.1, so the effect of the upgrade is itself a result.
-- Not read: COPR (blocked), Nobara's notes.
+- Not read: COPR (blocked), the distribution's own notes.
 
 ### PyTorch for ROCm 10
 
@@ -100,6 +100,6 @@ sanity-tested and release-ready.
 
 ## Not verified
 
-- Whether a COPR or Nobara package for ROCm 10 exists.
+- Whether a COPR or distribution package for ROCm 10 exists.
 - hipBLASLt's full FP8 type table and the order of its sums.
 - vLLM FP8 on gfx1201 in practice.

@@ -1,6 +1,6 @@
 # KFD topology of the RX 7900 XT (gfx1100), read from /sys/class/kfd/kfd/topology/nodes/1 on 2026-11-16
 # Baseline to compare with the RX 9070 XT after the swap. Read-only sysfs; no GPU load.
-# kernel: 7.3.4-201.nobara.fc44.x86_64
+# kernel: 7.3.4
 
 ## properties
 cpu_cores_count 0

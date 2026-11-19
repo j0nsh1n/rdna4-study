@@ -1000,10 +1000,10 @@ k32() {
             # The lead's observation: the game is the card client GameThread; "Cyberpunk 2077" is only in steam.exe's
             # command line.
             fake_proc 5001 GameThread yes 'Z:\game.exe'
-            fake_proc 5002 steam.exe no 'c:\windows\system32\steam.exe' '/var/mnt/games/SteamLibrary/steamapps/common/Cyberpunk 2077/REDprelauncher.exe' ;;
+            fake_proc 5002 steam.exe no 'c:\windows\system32\steam.exe' '/mnt/library/steamapps/common/Cyberpunk 2077/REDprelauncher.exe' ;;
         gamethread) fake_proc 5001 GameThread yes 'Z:\game.exe' ;;
         backslash) fake_proc 5001 MainThrd yes 'S:\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe' ;;
-        proton) fake_proc 5008 wineserver no '/home/u/.local/share/Steam/compatibilitytools.d/GE-Proton11-11/files/bin/wineserver' ;;
+        proton) fake_proc 5008 wineserver no '/opt/steam/compatibilitytools.d/GE-Proton11-11/files/bin/wineserver' ;;
         none) ;;
         esac
         kit -- short-tests "$case"

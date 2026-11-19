@@ -1,0 +1,26 @@
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 4db0d6843..6a5f9a61a 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -14136,6 +14136,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     }
+ 
+ 
++    // Llama 3.2 3B and Llama 3.1 8B weight matrices (m = output rows, k = inputs), prompt and decode batch sizes
++    {
++        const std::vector<std::pair<int64_t, int64_t>> llm_shapes = {
++            {3072, 3072}, {1024, 3072}, {8192, 3072}, {3072, 8192}, {128256, 3072},    // 3B: q/o, k/v, gate/up, down, output
++            {4096, 4096}, {1024, 4096}, {14336, 4096}, {4096, 14336}, {128256, 4096},  // 8B: q/o, k/v, gate/up, down, output
++        };
++        for (const auto & mk : llm_shapes) {
++            for (int64_t n : {1, 8, 32, 512, 2048}) {
++                for (ggml_type type_a : {GGML_TYPE_F8_E4M3, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
++                    test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, mk.first, n, mk.second, {1, 1}, {1, 1}));
++                }
++            }
++        }
++    }
++
+     return test_cases;
+ }
+ 

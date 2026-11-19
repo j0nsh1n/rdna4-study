@@ -1,0 +1,42 @@
+#version 450
+// Item 3b: FP32 FMA rate, 16 independent accumulators per lane. With a = b = 1 every FMA adds exactly 1, so the
+// result counts the FMAs that really ran. The accumulator is the addend and a, b are per-lane values from memory:
+// with uniform a, b ACO keeps them in scalar registers and emits VOP3 v_fma_f32, which has no dual-issue form.
+#include "common.glsl"
+layout(push_constant) uniform PC {
+    uint iters;
+    uint chunks;
+    float a;
+    float b;
+} pc;
+layout(set = 0, binding = 0) buffer Out { uint res[]; };
+layout(set = 0, binding = 2) readonly buffer AB { float abv[]; };
+
+#define F(x) x = fma(va, vb, x)
+void main() {
+    float s = float(gl_SubgroupInvocationID & 3u);
+    float va = abv[gl_SubgroupInvocationID], vb = abv[64u + gl_SubgroupInvocationID];
+    float x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, xa, xb, xc, xd, xe, xf;
+    uint done = 0, tot = 0;
+    uint64_t k0 = clockARB();
+    uint64_t r0 = clockRealtimeEXT();
+    for (;;) {
+        uint ch = next_chunk();
+        if (ch >= pc.chunks) break;
+        // Restart every chunk from a value that depends on the chunk count, and add the chunk's result into an
+        // exact integer total: the oldest wave on a SIMD can take many more chunks than the average.
+        float r = s + float(done & 3u);
+        x0 = r; x1 = r + 4; x2 = r + 8; x3 = r + 12; x4 = r + 16; x5 = r + 20; x6 = r + 24; x7 = r + 28;
+        x8 = r + 32; x9 = r + 36; xa = r + 40; xb = r + 44; xc = r + 48; xd = r + 52; xe = r + 56; xf = r + 60;
+        for (uint i = 0; i < pc.iters; i++) {
+            F(x0); F(x1); F(x2); F(x3); F(x4); F(x5); F(x6); F(x7);
+            F(x8); F(x9); F(xa); F(xb); F(xc); F(xd); F(xe); F(xf);
+        }
+        tot += uint(x0) + uint(x1) + uint(x2) + uint(x3) + uint(x4) + uint(x5) + uint(x6) + uint(x7) + uint(x8) +
+               uint(x9) + uint(xa) + uint(xb) + uint(xc) + uint(xd) + uint(xe) + uint(xf);
+        done++;
+    }
+    write_info(done, k0, r0);
+    uint t = tot;
+    res[global_subgroup() * gl_SubgroupSize + gl_SubgroupInvocationID] = t;
+}

@@ -1,0 +1,32 @@
+#version 450
+// Item 8 (compile only): what ACO emits for 16-bit float dot products and FP8/BF8 conversions.
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_EXT_float_e4m3 : require
+#extension GL_EXT_float_e5m2 : require
+#extension GL_EXT_bfloat16 : require
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer O { float o[]; };
+layout(set = 0, binding = 2) readonly buffer H { f16vec2 h[]; };
+layout(set = 0, binding = 3) readonly buffer W { uint w[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    f16vec2 x = h[2u * i], y = h[2u * i + 1u];
+    float16_t d16 = dot(x, y);
+    float mixed = float(x.x) * float(y.x) + float(x.y) * float(y.y);
+    bf16vec2 bx = bf16vec2(vec2(x)), by = bf16vec2(vec2(y));
+    bfloat16_t dbf = dot(bx, by);
+    uint p = w[i];
+    floate4m3_t e0 = uintBitsToFloate4m3EXT(uint8_t(p & 0xffu));
+    floate5m2_t e1 = uintBitsToFloate5m2EXT(uint8_t((p >> 8) & 0xffu));
+    float wide = float(e0) + float(e1);
+    floate4m3_t n0 = floate4m3_t(mixed);
+    floate5m2_t n1 = floate5m2_t(mixed);
+    floate4m3_t s0;
+    saturatedConvertEXT(s0, mixed);
+    uint packed = uint(floate4m3BitsToUintEXT(n0)) | (uint(floate5m2BitsToUintEXT(n1)) << 8) |
+                  (uint(floate4m3BitsToUintEXT(s0)) << 16);
+    o[4u * i] = float(d16);
+    o[4u * i + 1u] = mixed + float(dbf);
+    o[4u * i + 2u] = wide;
+    o[4u * i + 3u] = uintBitsToFloat(packed);
+}

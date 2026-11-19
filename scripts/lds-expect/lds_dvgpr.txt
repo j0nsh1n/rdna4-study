@@ -1,0 +1,7 @@
+# expectations for src/study/lds_dvgpr.hip (scripts/mem_loopcheck.py); k_probe has no loop, so the checks are on the whole kernel
+.* scratch == 0
+k_probe kernel s_alloc_vgpr\s == 3
+k_probe kernel s_cmp_eq_u32 == 3
+k_probe kernel s_cselect_b32 == 3
+k_probe kernel s_wait_loadcnt == 0
+k_probe loop s_alloc_vgpr\s == 0

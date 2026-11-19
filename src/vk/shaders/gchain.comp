@@ -1,0 +1,47 @@
+#version 450
+// P1: one dispatch of a list. Subgroup 0 of every stride-th group reads REALTIME and the cycle counter once at entry
+// and once at exit (never polls REALTIME). Every wave spins `spin` cycles on its own counter (a body of known length
+// in cycles). check = 1: each invocation first reads a word that another group wrote at the end of the previous
+// dispatch and counts a mismatch; without a barrier between dispatches this must see stale values.
+#include "gcommon.glsl"
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Rec { uvec4 rec[]; };
+layout(set = 0, binding = 1) buffer Chk { uint chk[]; };
+layout(set = 0, binding = 2) buffer Err { uint err[]; };
+layout(push_constant) uniform PC {
+    uint k;        // 1-based position in the list
+    uint spin;     // cycles each wave spins
+    uint stride;   // stamp every stride-th group; 0 = no stamps
+    uint rec_base; // record index of this dispatch's first stamped group
+    uint check;    // 1 = dependency check against the previous dispatch
+    uint words;    // words of the check buffer (grid x local size)
+    uint rep;      // error counter index
+} pc;
+void main() {
+    bool st = pc.stride != 0u && (gl_WorkGroupID.x % pc.stride) == 0u && gl_SubgroupID == 0u;
+    uint64_t r0 = 0ul, c0 = 0ul;
+    if (st) {
+        r0 = clockRealtimeEXT();
+        c0 = clockARB();
+    }
+    uint i = gl_GlobalInvocationID.x;
+    if (pc.check != 0u) {
+        uint v = chk[(i + pc.words / 2u + 37u) % pc.words];
+        if (v != pc.k - 1u) atomicAdd(err[pc.rep], 1u);
+    }
+    // The loop counts its turns and a store depends on the count: an empty loop is deleted by the compiler.
+    uint turns = 0u;
+    if (pc.spin != 0u) {
+        uint64_t s = clockARB();
+        while (clockARB() - s < uint64_t(pc.spin)) turns++;
+    }
+    if (turns == 0xFFFFFFFFu) err[pc.rep + 1u] = turns;
+    if (pc.check != 0u) chk[i] = pc.k;
+    else if (i == 0u) chk[0] = pc.k;
+    if (st) {
+        uint64_t c1 = clockARB();
+        uint64_t r1 = clockRealtimeEXT();
+        if (subgroupElect())
+            rec[pc.rec_base + gl_WorkGroupID.x / pc.stride] = uvec4(uint(r0), uint(r0 >> 32), uint(r1 - r0), uint(c1 - c0));
+    }
+}

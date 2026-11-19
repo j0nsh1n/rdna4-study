@@ -1,0 +1,9 @@
+# expectations for src/study/haz_issue.hip, default build
+.* scratch == 0
+# uniform k and c sit in scalar registers: VOP3 FMAs with two scalar sources, never paired
+i_acc8P loop v_fmac_f32_e64 == 16
+i_acc8P loop v_dual == 0
+# the same loop with per-lane k and c: all 16 FMAs paired
+i_acc8vP loop v_dual_fmac_f32 == 8
+i_chain1 loop s_delay_alu >= 7
+i_mm loop v_wmma_f32_16x16x16_f16 == 16

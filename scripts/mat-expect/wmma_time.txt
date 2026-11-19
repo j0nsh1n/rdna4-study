@@ -1,0 +1,15 @@
+# expectations for src/wmma_time.hip (the first-hour probe, scripts/mem_loopcheck.py). chain<KIND, NFMA, NACC>:
+# clang unrolls the 6 repetitions, so each kernel has 6 timed loops of 16 iterations (unroll 16) of NACC matrix
+# instructions and NFMA FMAs each.
+.* scratch == 0
+chainILi1ELi0ELi1E loop v_wmma_f32_16x16x16_f16\s == 96
+chainILi1ELi0ELi4E loop v_wmma_f32_16x16x16_f16\s == 384
+chainILi2ELi0ELi1E loop v_wmma_f32_16x16x16_bf16\s == 96
+chainILi2ELi0ELi4E loop v_wmma_f32_16x16x16_bf16\s == 384
+chainILi3ELi0ELi1E loop v_wmma_f32_16x16x16_fp8_fp8\s == 96
+chainILi3ELi0ELi4E loop v_wmma_f32_16x16x16_fp8_fp8\s == 384
+chainILi4ELi0ELi1E loop v_wmma_i32_16x16x16_iu8\s == 96
+chainILi4ELi0ELi4E loop v_wmma_i32_16x16x16_iu8\s == 384
+chainILi[13]ELi32ELi1E loop v_wmma == 96
+chainILi[013]ELi32ELi1E loop v_fma == 3072
+chainILi[1-4]ELi0E loop v_nop == 0

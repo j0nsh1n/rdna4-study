@@ -1,0 +1,18 @@
+# expectations for src/study/haz_regs.hip (from the listing of the same build; scripts/mem_loopcheck.py)
+# Written from the model (accumulators are 8 VGPRs each, fragments 4 each, max 256 VGPRs, 4x4 = 128 acc + 32 frag)
+# before the listing was read; the values that did not hold are marked in haz_regs-REPORT.md.
+^_Z11regs_kernelILi2ELi2E scratch == 0
+^_Z11regs_kernelILi4ELi4E scratch == 0
+^_Z11regs_kernelILi4ELi4E vgpr <= 256
+^_Z11regs_kernelILi4ELi4E loop scratch_ == 0
+^_Z11regs_kernelILi8ELi8E scratch >= 1
+^_Z11regs_kernelILi4ELi8E scratch >= 1
+^_Z11regs_kernelILi8ELi8E kernel scratch_store >= 1
+# a 4x4 tile has 16 matrix instructions per K step; with the default loop at least that many in the loop
+^_Z11regs_kernelILi4ELi4E loop v_wmma_ >= 16
+^_Z11regs_kernelILi2ELi2E loop v_wmma_ >= 4
+# forced occupancy 16 needs 96 VGPRs: 128 accumulators cannot fit
+^_Z15regs_kernel_w16ILi4ELi4E vgpr <= 96
+^_Z15regs_kernel_w16ILi4ELi4E scratch >= 1
+^_Z15regs_kernel_w12ILi4ELi4E vgpr <= 128
+^_Z14regs_kernel_u4ILi4ELi4E loop v_wmma_ >= 16

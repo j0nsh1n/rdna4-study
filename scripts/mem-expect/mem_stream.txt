@@ -1,0 +1,28 @@
+# expectations for src/study/mem_stream.hip (scripts/mem_loopcheck.py)
+.* scratch == 0
+^_Z8read_ref loop global_load_b128 >= 1
+^_Z9read_dead kernel global_load == 0
+read_repILi loop global_load_b128 >= 8
+shape_kernelILi4E loop global_load_b32\s == 8
+shape_kernelILi8E loop global_load_b64\s == 8
+shape_kernelILi12E loop global_load_b96\s == 8
+shape_kernelILi16E loop global_load_b128\s == 8
+shape_kernel loop s_wait_loadcnt == 1
+shape_kernelILi16ELi1E loop global_load_b128\s\S+,\s\S+,\soff$ == 8
+shape_kernelILi16ELi0ELi0E loop global_load_b128\s\S+,\s\S+,\ss\[\d+:\d+\]$ == 8
+shape_kernelILi16ELi0ELi1E loop global_load_b128.*th:TH_LOAD_NT$ == 8
+shape_kernelILi16ELi0ELi2E loop global_load_b128.*th:TH_LOAD_HT$ == 8
+shape_kernelILi16ELi0ELi3E loop global_load_b128.*th:TH_LOAD_LU$ == 8
+shape_kernelILi16ELi0ELi4E loop global_load_b128.*th:TH_LOAD_NT_RT$ == 8
+shape_kernelILi16ELi0ELi5E loop global_load_b128.*th:TH_LOAD_RT_NT$ == 8
+shape_kernelILi16ELi0ELi6E loop global_load_b128.*th:TH_LOAD_NT_HT$ == 8
+shape_kernelILi16ELi0ELi7E loop global_load_b128.*scope:SCOPE_SE$ == 8
+shape_kernelILi16ELi0ELi8E loop global_load_b128.*scope:SCOPE_DEV$ == 8
+shape_kernelILi16ELi0ELi9E loop global_load_b128.*scope:SCOPE_SYS$ == 8
+shape_kernelILi16ELi0ELi10E loop global_load_b128.*th:TH_LOAD_NT\sscope:SCOPE_SYS$ == 8
+^_Z8read_one kernel global_load_b128 == 1
+# eight 16-byte loads in flight need 32 destination registers; fewer means the values were consumed before the wait
+shape_kernelILi16E vgpr >= 32
+read_repILi vgpr >= 32
+read_winILi loop global_load_b128 == 8
+read_winILi vgpr >= 32

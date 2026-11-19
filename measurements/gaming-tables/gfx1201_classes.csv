@@ -1,0 +1,31 @@
+isasim_class,case,issue_cycles,latency_cycles,note,source_file,source_line,study_commit,latency_low,latency_high
+valu,v_fma_f32 / v_add_f32 / v_mul_f32,1.0,5.0,"issue 1.00, latency 5.00",execution-core.md,| `v_fma_f32` | fp32 | 5.00 | 1.00 | 1.00 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+valu,v_add_nc_u32 (int),1.0,5.0,latency 5.00-5.26,execution-core.md,| `v_add_nc_u32` | int | 5.00 (5.00-5.26) | 1.00 | 1.00 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+pk,v_pk_fma_f16,1.0,5.0,latency 4.84-5.46,execution-core.md,| `v_pk_fma_f16` | fp16x2 | 5.00 (4.84-5.46) | 1.00 | 1.00 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+pk,v_fma_mix_f32,1.0,5.0,latency 4.85-5.00,execution-core.md,| `v_fma_mix_f32` | mixed | 5.00 (4.85-5.00) | 1.00 | 1.00 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+valu,v_dot2_f32_f16,1.0,6.0,latency 5.82-6.38,execution-core.md,| `v_dot2_f32_f16` | dot | 6.00 (5.82-6.38) | 1.00 | 1.00 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+cvt,v_cvt_f16_f32,1.0,5.0,issue 0.76-1.00,execution-core.md,| `v_cvt_f16_f32` | cvt | 5.00 | 1.00 (0.76-1.00) | 1.00 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+trans,"v_exp_f32 (rcp, rsq, sqrt, log, sin, cos the same)",4.0,10.0,overlaps other VALU (execution-core s3/s6),execution-core.md,| `v_exp_f32` | trans | 10.00 | 4.00 | 0.25 | 9 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+quarter,v_mul_lo_u32,4.0,8.0,"issue 3.89-4.64, latency 7.71-8.00",execution-core.md,| `v_mul_lo_u32` | int | 8.00 (7.71-8.00) | 4.00 (3.89-4.64) | 0.25 | 6 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+quarter,v_mad_co_u64_u32,4.0,7.0,latency 7.00-7.15,execution-core.md,| `v_mad_co_u64_u32` | int64 | 7.00 (7.00-7.15) | 4.00 | 0.25 | 6 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+half,v_lshlrev_b64,2.0,6.0,latency 6.00-6.20,execution-core.md,| `v_lshlrev_b64` | int64 | 6.00 (6.00-6.20) | 2.00 | 0.50 | 6 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+half,v_mov_b32 DPP8,2.0,6.0,,execution-core.md,| `v_mov_b32` DPP8 | lane | 6.00 | 2.00 | 0.50 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+f64,"v_fma_f64 (add, mul the same)",32.0,38.0,issue 31.93-32.00,execution-core.md,| `v_fma_f64` | fp64 | 38.00 (37.97-38.04) | 32.00 (31.93-32.00) | 0.03 | 38 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+f64,v_rcp_f64,32.0,40.0,,execution-core.md,| `v_rcp_f64` | fp64 | 40.00 (40.00-40.02) | 32.00 | 0.03 | 40 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+perm,v_permlane16_var_b32 / v_permlanex16_var_b32,1.0,5.0,permlanex16 1 cycle (RDNA 3 predictor: 1.9),execution-core.md,| `v_permlanex16_var_b32` | lane | 5.00 | 1.00 | 1.00 | 5 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+lds_x,ds_bpermute_b32,5.06,36.0,latency 35.84-36.11,execution-core.md,"| `ds_bpermute_b32` (c16: 16 issued, one wait) | lane | 36.00 (35.84-36.11) | 5.06 | 0.20 | 20 |",bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+vopd,v_dual_fmac_f32 pair,0.984,,per pair; wave64 cannot encode VOPD,execution-core.md,| du_fmac | 0.984 | 0.984-0.984 | v_dual_fmac_f32 x2 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+wave64,"independent v_fma_f32, wave64",1.235,,0.81 instructions per cycle (51.85 lane-FMA/cycle); replaces WAVE64_VALU_X = 2,scheduling-and-clocks.md,"| Independent `v_fma_f32`, one wave alone: lane-FMAs per cycle per SIMD | 32.00 (1 instruction per cycle) | 51.85 (0.81 instructions per cycle) |",bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+occupancy,waves per SIMD,,,"wave32 min(16, floor(1536/roundup24(VGPR))); wave64 doubles the VGPRs",scheduling-and-clocks.md,"`min(16, floor(1536 / roundup24(2 x VGPRs)))`",bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+dep,"dependent FMA chain with s_delay_alu, 1/2/4/8/16 waves",,5.0,cycles per op 5.000 / 2.500 / 1.250 / 1.250 / 1.222 (replaces DEP_PENALTY),execution-core.md,| dep_fma_delayalu | 5.000 (5.00; 1.00) | 2.500 (5.00; 2.00) | 1.250 (5.00; 4.00) | 1.250 (5.02; 5.44) | 1.222 (5.03; 9.06) |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+wmma,FP16/BF16 16x16x16 (dependent C chain = issue),16.0,16.0,result as A/B 19 with V_NOP,matrix-timing.md,"16 cycles for
+  FP16 and BF16 inputs",bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+wmma4,FP8/BF8/IU8 16x16x16,8.0,8.0,result as A/B 11 with V_NOP,matrix-timing.md,"8 cycles for FP8, BF8, 8-bit and 4-bit integer",bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+wmma,result used as A or B,,19.0,FP16; FP8 11,matrix-timing.md,a result used as A or B gives 19 cycles per FP16 instruction and 11 per FP8,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+lds,ds_load_b32,1.0,32.0,"128 B/cycle; b64 same B/cycle; b128 6 cycles (85 B/cycle); 32-bank model, one cycle per extra pass",lds-and-special-loads.md,"a 32-bit load costs one cycle per wave (128 bytes per cycle) and its data arrives 32
+  cycles after issue",bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+smem,scalar load,,,latency 26-36 on a scalar-cache hit (range columns); 140-210 on a miss,lds-and-special-loads.md,a 16 KB scalar cache answers in about 26 to 36 cycles; past it they take 140 to 210 cycles,bab895c9d9fab5239eb8d1f0017f481fcfdace96,26,36
+vmem,L0 hit,,81,24-29 ns,memory-system.md,| L0 vector cache | 32 KB | one CU (not the other CU of the WGP) | 81 / 24-29 |,bab895c9d9fab5239eb8d1f0017f481fcfdace96,,
+vmem,memory-side cache (MALL) hit,,,latency 360-390 in page order (range columns); 420-500 random,memory-system.md,360-390 / 105-118 in page order,bab895c9d9fab5239eb8d1f0017f481fcfdace96,360,390
+vmem,DRAM,,,"latency 485-545 (range columns); 633 GB/s read, 581 write",memory-system.md,| GDDR6 | 16 GB | | 485-545 / 142-158,bab895c9d9fab5239eb8d1f0017f481fcfdace96,485,545
+launch,"back-to-back launches (HIP), empty / one wave",,,"2.13 us (empty) / 3.36 us (one wave) per launch on the GPU queue; microseconds, not cycles",scheduling-and-clocks.md,"| Back to back, 2000 launches then one synchronize, empty / one wave | 2.13 / 3.36 us per launch",bab895c9d9fab5239eb8d1f0017f481fcfdace96,,

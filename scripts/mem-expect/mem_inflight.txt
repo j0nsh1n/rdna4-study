@@ -1,0 +1,28 @@
+# expectations for src/study/mem_inflight.hip (scripts/mem_loopcheck.py); each k_inflight has a warm-up loop and a timed loop
+.* scratch == 0
+k_inflightILi4ELi1EE loop global_load_b32\s == 2
+k_inflightILi4ELi2EE loop global_load_b32\s == 4
+k_inflightILi4ELi4EE loop global_load_b32\s == 8
+k_inflightILi4ELi8EE loop global_load_b32\s == 16
+k_inflightILi4ELi12EE loop global_load_b32\s == 24
+k_inflightILi4ELi16EE loop global_load_b32\s == 32
+k_inflightILi4ELi24EE loop global_load_b32\s == 48
+k_inflightILi4ELi32EE loop global_load_b32\s == 64
+k_inflightILi4ELi40EE loop global_load_b32\s == 80
+k_inflightILi4ELi48EE loop global_load_b32\s == 96
+k_inflightILi4ELi56EE loop global_load_b32\s == 112
+k_inflightILi4ELi63EE loop global_load_b32\s == 126
+k_inflightILi4ELi64EE loop global_load_b32\s == 128
+k_inflightILi4ELi72EE loop global_load_b32\s == 144
+k_inflightILi4ELi80EE loop global_load_b32\s == 160
+k_inflightILi4ELi96EE loop global_load_b32\s == 192
+k_inflightILi16ELi1EE loop global_load_b128\s == 2
+k_inflightILi16ELi2EE loop global_load_b128\s == 4
+k_inflightILi16ELi4EE loop global_load_b128\s == 8
+k_inflightILi16ELi8EE loop global_load_b128\s == 16
+k_inflightILi16ELi12EE loop global_load_b128\s == 24
+k_inflightILi16ELi16EE loop global_load_b128\s == 32
+k_inflightILi16ELi24EE loop global_load_b128\s == 48
+k_inflight loop s_wait_loadcnt\s0$ >= 2
+k_waits loop global_load_b64\s == 4
+k_waits loop global_load_b32\s == 16

@@ -1,0 +1,30 @@
+#version 450
+// Item 6 addition: one multiply-add per set with every A and B element 0.25 (each D element is C + 1 exactly) and
+// a large C, to see where small products stop reaching the FP32 accumulator for each input type.
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+#if defined(T_BF16)
+#extension GL_EXT_bfloat16 : require
+#define TA bfloat16_t
+#elif defined(T_FP8)
+#extension GL_EXT_float_e4m3 : require
+#define TA floate4m3_t
+#else
+#define TA float16_t
+#endif
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer D { float d[]; };
+layout(set = 0, binding = 1) readonly buffer C { float cin[]; };
+layout(set = 0, binding = 2) readonly buffer A { TA a[]; };
+void main() {
+    uint base = gl_WorkGroupID.x * 256u;
+    coopmat<TA, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma;
+    coopmat<TA, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> mc;
+    coopMatLoad(ma, a, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(mb, a, 256, 16, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(mc, cin, base, 16, gl_CooperativeMatrixLayoutRowMajor);
+    mc = coopMatMulAdd(ma, mb, mc);
+    coopMatStore(mc, d, base, 16, gl_CooperativeMatrixLayoutRowMajor);
+}

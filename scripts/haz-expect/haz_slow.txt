@@ -1,0 +1,57 @@
+# Expectations for haz_slow (gfx1201). Format of scripts/mem_loopcheck.py. All counts are for the timed loop (the
+# innermost loop) unless the line says "kernel". Names are matched inside the mangled kernel names.
+# Every kernel: no spills, small VGPR use.
+k_ scratch == 0
+k_ vgpr <= 24
+
+# float divide, default flags: correctly rounded sequence (scale, reciprocal + Newton steps, fmas, fixup), not a bare v_rcp
+k_fdiv(?!ef)|k_frcp|k_fdividef loop ^v_div_scale_f32 == 2
+k_fdiv(?!ef)|k_frcp|k_fdividef loop ^v_div_fmas_f32 == 1
+k_fdiv(?!ef)|k_frcp|k_fdividef loop ^v_div_fixup_f32 == 1
+k_fdiv(?!ef)|k_frcp|k_fdividef loop ^v_rcp_f32 == 1
+k_fdiv(?!ef)|k_frcp|k_fdividef loop ^v_fma_f32 == 3
+# HIP's __fdividef is plain division here, so it must match k_fdiv
+k_fdividef loop ^v_div_fmas_f32 == 1
+
+# sqrt: one v_sqrt_f32 plus denormal scaling and a Newton/rounding fix-up
+k_sqrt loop ^v_sqrt_f32 == 1
+k_sqrt loop ^v_cmp_class_f32 >= 1
+k_sqrt loop ^v_fma_f32 >= 2
+
+# expf: v_exp_f32 with range reduction and a ldexp for the denormal range; __expf is a multiply and one v_exp_f32
+k_exp(?!fast) loop ^v_exp_f32 == 1
+k_exp(?!fast) loop ^v_ldexp_f32 == 1
+k_exp(?!fast) loop ^v_rndne_f32 == 1
+k_expfast loop ^v_exp_f32 == 1
+k_expfast loop ^v_mul_f32 == 1
+k_expfast loop ^v_cndmask <= 0
+
+# 32-bit integer divide and remainder: reciprocal sequence with v_rcp_f32, two mul_hi, two mul_lo, no loop inside
+k_(s|u)32(div|rem) loop ^v_rcp_f32 == 1
+k_(s|u)32(div|rem) loop ^v_mul_hi_u32 == 2
+k_(s|u)32(div|rem) loop ^v_mul_lo_u32 == 2
+k_u32div loop . <= 36
+k_s32div loop . >= 40
+
+# 64-bit multiply: one mad_co_u64_u32 and two mul_lo
+k_mul64 loop ^v_mad_co_u64_u32 == 1
+k_mul64 loop ^v_mul_lo_u32 == 1
+
+# 64-bit unsigned divide: long sequence with a 32-bit fast path (v_rcp_iflag_f32) and the 64-bit path (v_rcp_f32)
+k_u64div kernel ^v_rcp_iflag_f32 == 1
+k_u64div kernel ^v_rcp_f32 == 1
+k_u64div kernel ^v_mad_co_u64_u32 >= 12
+k_u64div kernel ^v_mul_lo_u32 >= 8
+k_u64div kernel ^s_cbranch_execz >= 2
+k_u64div loop . >= 100
+
+# conversions: one instruction each
+k_i2f loop ^v_cvt_f32_i32 == 1
+k_u2f loop ^v_cvt_f32_u32 == 1
+k_f2i loop ^v_cvt_i32_f32 == 1
+k_f2u loop ^v_cvt_u32_f32 == 1
+k_(i2f|u2f|f2i|f2u) loop . <= 7
+
+# the chain link itself
+k_dep loop ^v_and_or_b32 == 1
+k_dep loop . <= 5

@@ -1,0 +1,17 @@
+#version 450
+// P2: the study's one-group dispatch (vksched_one.comp: each lane writes base + its index), plus REALTIME at entry and
+// exit so its start can be placed on the GPU timeline.
+#include "gcommon.glsl"
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) buffer Out { uint res[]; };
+layout(set = 0, binding = 1) buffer Rec { uvec4 rec[]; };
+layout(push_constant) uniform PC {
+    uint base;
+    uint slot;
+} pc;
+void main() {
+    uint64_t r0 = clockRealtimeEXT();
+    res[pc.slot * 64u + gl_LocalInvocationIndex] = pc.base + gl_LocalInvocationIndex;
+    uint64_t r1 = clockRealtimeEXT();
+    if (subgroupElect()) rec[pc.slot] = uvec4(uint(r0), uint(r0 >> 32), uint(r1), uint(r1 >> 32));
+}

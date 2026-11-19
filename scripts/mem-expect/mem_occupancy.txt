@@ -1,0 +1,30 @@
+# expectations for src/study/mem_occupancy.hip (scripts/mem_loopcheck.py)
+.* scratch == 0
+k_occ_24P vgpr == 24
+k_occ_25P vgpr == 25
+k_occ_48P vgpr == 48
+k_occ_49P vgpr == 49
+k_occ_64P vgpr == 64
+k_occ_72P vgpr == 72
+k_occ_73P vgpr == 73
+k_occ_96P vgpr == 96
+k_occ_97P vgpr == 97
+k_occ_120P vgpr == 120
+k_occ_128P vgpr == 128
+k_occ_144P vgpr == 144
+k_occ_160P vgpr == 160
+k_occ_168P vgpr == 168
+k_occ_192P vgpr == 192
+k_occ_193P vgpr == 193
+k_occ_256P vgpr == 256
+k_bw_48ILi[14]E vgpr == 48
+k_bw_72I vgpr == 72
+k_bw_96I vgpr == 96
+k_bw_120I vgpr == 120
+k_bw_144I vgpr == 144
+k_bw_192I vgpr == 192
+k_bw_24ILi1E vgpr == 24
+k_bw_\d+ILi1E loop global_load_b128\s == 1
+k_bw_\d+ILi4E loop global_load_b128\s == 4
+k_bw_\d+ILi16E loop global_load_b128\s == 16
+k_bw_ loop s_wait_loadcnt\s0$ == 1

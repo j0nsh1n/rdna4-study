@@ -1,0 +1,4 @@
+# expectations for src/study/haz_issue.hip built with -mllvm --amdgpu-enable-delay-alu=0
+.* scratch == 0
+.* kernel s_delay_alu == 0
+i_acc8vP loop v_dual_fmac_f32 == 8

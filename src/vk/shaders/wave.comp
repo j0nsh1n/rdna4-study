@@ -1,0 +1,28 @@
+#version 450
+// Item 2: which subgroup size the driver chose, seen from inside the shader.
+#include "common.glsl"
+#ifdef COOP
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#endif
+layout(set = 0, binding = 0) buffer Out { uint res[]; };
+#ifdef COOP
+layout(set = 0, binding = 2) buffer M { float m[]; };
+#endif
+void main() {
+    if (gl_LocalInvocationIndex == 0u) {
+        res[gl_WorkGroupID.x * 4u + 0u] = gl_SubgroupSize;
+        res[gl_WorkGroupID.x * 4u + 1u] = gl_NumSubgroups;
+        res[gl_WorkGroupID.x * 4u + 2u] = gl_WorkGroupSize.x;
+    }
+#ifdef COOP
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> a =
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>(float16_t(1.0));
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> b =
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>(float16_t(1.0));
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> c =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    c = coopMatMulAdd(a, b, c);
+    coopMatStore(c, m, global_subgroup() * 256u, 16, gl_CooperativeMatrixLayoutRowMajor);
+#endif
+}

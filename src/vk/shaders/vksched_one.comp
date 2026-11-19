@@ -1,0 +1,8 @@
+#version 450
+// One work-group whose result is checkable: each lane writes base + its index.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) buffer Out { uint res[]; };
+layout(push_constant) uniform PC { uint base; } pc;
+void main() {
+    res[gl_LocalInvocationIndex] = pc.base + gl_LocalInvocationIndex;
+}

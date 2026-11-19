@@ -1,0 +1,6 @@
+sources/
+build/
+runs/
+toolchains/
+__pycache__/
+local.env

@@ -1,0 +1,87 @@
+#version 450
+// Item 5: cooperative-matrix load of A and B from buffers, then one multiply-add into one accumulator per tile.
+// Chunks of T tiles are handed out by work stealing; tile g of the window sits at row-block g / tiles_per_row.
+// Leftovers C: -DPIPE (VK-3) issues the loads of tile t + 1 before the multiply-add of tile t (software pipelining);
+// -DPIPE -DPIPE_BREAK loads tile t + 2 instead (the deliberate break: the checksum must fail); -DEXTRA=n (VK-4) adds
+// n dependent integer multiply-adds per tile on a value kept alive to the end (extra vector issue per tile).
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#include "common.glsl"
+#ifdef T_FP8
+#extension GL_EXT_float_e4m3 : require
+#define TA floate4m3_t
+#else
+#define TA float16_t
+#endif
+#ifdef COLMAJOR
+#define LAYOUT gl_CooperativeMatrixLayoutColumnMajor
+#else
+#define LAYOUT gl_CooperativeMatrixLayoutRowMajor
+#endif
+
+layout(push_constant) uniform PC {
+    uint window;        // tiles in the window that chunks cycle through
+    uint tiles;         // T, tiles per chunk
+    uint chunks;
+    uint stride;        // elements between consecutive rows (row-major) or columns (column-major)
+    uint tiles_per_row; // stride / 16; a chunk never crosses a row-block (T divides it, or it is 1)
+    uint step;          // elements between consecutive tiles of a chunk: 16 * stride (tight) or 16 (wide)
+} pc;
+layout(set = 0, binding = 0) buffer Out { float outc[]; };
+layout(set = 0, binding = 2) readonly buffer A { TA a[]; };
+layout(set = 0, binding = 3) readonly buffer B { TA b[]; };
+
+void main() {
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> c =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    uint done = 0;
+#ifdef EXTRA
+    uint xs = gl_SubgroupInvocationID;
+#endif
+    uint64_t k0 = clockARB();
+    uint64_t r0 = clockRealtimeEXT();
+    for (;;) {
+        uint ch = next_chunk();
+        if (ch >= pc.chunks) break;
+        uint g0 = (ch * pc.tiles) % pc.window;
+        uint off = (g0 / pc.tiles_per_row) * 16u * pc.stride + (g0 % pc.tiles_per_row) * 16u;
+#ifdef PIPE
+        coopmat<TA, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma, na;
+        coopmat<TA, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb, nb;
+        coopMatLoad(ma, a, off, pc.stride, LAYOUT);
+        coopMatLoad(mb, b, off, pc.stride, LAYOUT);
+        for (uint t = 0; t < pc.tiles; t++) {
+#ifdef PIPE_BREAK
+            uint noff = off + 2u * pc.step;
+#else
+            uint noff = off + pc.step;
+#endif
+            if (t + 1u < pc.tiles) {
+                coopMatLoad(na, a, noff, pc.stride, LAYOUT);
+                coopMatLoad(nb, b, noff, pc.stride, LAYOUT);
+            }
+            c = coopMatMulAdd(ma, mb, c);
+            ma = na;
+            mb = nb;
+            off += pc.step;
+        }
+#else
+        for (uint t = 0; t < pc.tiles; t++, off += pc.step) {
+            coopmat<TA, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma;
+            coopmat<TA, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb;
+            coopMatLoad(ma, a, off, pc.stride, LAYOUT);
+            coopMatLoad(mb, b, off, pc.stride, LAYOUT);
+            c = coopMatMulAdd(ma, mb, c);
+#ifdef EXTRA
+            for (int q = 0; q < EXTRA; q++) xs = xs * 1664525u + (off ^ uint(q));
+#endif
+        }
+#endif
+        done++;
+    }
+    write_info(done, k0, r0);
+#ifdef EXTRA
+    if (xs == 0x7fc0ffeeu) c = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(1.0); // keeps xs alive
+#endif
+    coopMatStore(c, outc, global_subgroup() * 256u, 16, gl_CooperativeMatrixLayoutRowMajor);
+}

@@ -1,0 +1,19 @@
+# expectations for src/study/mem_store.hip (scripts/mem_loopcheck.py)
+.* scratch == 0
+^_Z5st_rt loop global_store_b128\s\S+,\s\S+,\soff$ == 1
+^_Z5st_nt loop global_store_b128.*th:TH_STORE_NT$ == 1
+st_asmILi0E loop global_store_b128.*th:TH_STORE_HT$ == 1
+st_asmILi1E loop global_store_b128.*th:TH_STORE_WB$ == 1
+st_asmILi2E loop global_store_b128.*scope:SCOPE_SYS$ == 1
+^_Z6st_b32 loop global_store_b32\s == 1
+^_Z7st_half loop global_store_b32\s == 1
+^_Z10st_evenodd loop global_store_b32\s == 2
+^_Z10st_strided loop global_store_b128\s == 1
+^_Z5cp_rt loop global_load_b128\s\S+,\s\S+,\soff$ == 1
+^_Z5cp_nt loop global_load_b128.*th:TH_LOAD_NT$ == 1
+^_Z5cp_nt loop global_store_b128.*th:TH_STORE_NT$ == 1
+^_Z9cp_ntload loop global_load_b128.*th:TH_LOAD_NT$ == 1
+^_Z9cp_ntload loop global_store_b128\s\S+,\s\S+,\soff$ == 1
+^_Z3rmw loop global_store_b128\s == 1
+^_Z2rd loop global_load_b128\s == 1
+rd_cus loop global_load_b128\s == 4

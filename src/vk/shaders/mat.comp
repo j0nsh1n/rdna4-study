@@ -1,0 +1,110 @@
+#version 450
+// Item 4: cooperative-matrix multiply-add with A and B in registers, 4 independent accumulators, 16 per iteration.
+// Leftovers C (VK-7a): T_FP8BF8, T_BF8FP8, T_BF8 (E4M3 and E5M2 mixed and alone; B is read from binding 3, the same
+// buffer, so A and B may differ in type) and T_I8SAT (signed 8-bit with saturating accumulation).
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#include "common.glsl"
+#if defined(T_BF16)
+#extension GL_EXT_bfloat16 : require
+#define TA bfloat16_t
+#define TC float
+#elif defined(T_FP8)
+#extension GL_EXT_float_e4m3 : require
+#define TA floate4m3_t
+#define TC float
+#elif defined(T_I8) || defined(T_I8SAT)
+#define TA int8_t
+#define TC int32_t
+#elif defined(T_FP8BF8) || defined(T_BF8FP8) || defined(T_BF8)
+#extension GL_EXT_float_e4m3 : require
+#extension GL_EXT_float_e5m2 : require
+#if defined(T_FP8BF8)
+#define TA floate4m3_t
+#define TB floate5m2_t
+#elif defined(T_BF8FP8)
+#define TA floate5m2_t
+#define TB floate4m3_t
+#else
+#define TA floate5m2_t
+#define TB floate5m2_t
+#endif
+#define TC float
+#else
+#define TA float16_t
+#define TC float
+#endif
+
+#ifndef TB
+#define TB TA
+#endif
+#ifdef T_I8SAT
+#define MMA(A, B, C) coopMatMulAdd(A, B, C, gl_MatrixOperandsSaturatingAccumulation)
+#else
+#define MMA(A, B, C) coopMatMulAdd(A, B, C)
+#endif
+#define MA coopmat<TA, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+#define MB coopmat<TB, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+#define MC coopmat<TC, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+
+layout(push_constant) uniform PC {
+    uint iters;
+    uint chunks;
+    float av;
+    float bv;
+} pc;
+layout(set = 0, binding = 0) buffer Out { uint outu[]; };
+#ifdef LOADAB
+// A and B are loaded once from memory, so they live in vector registers; the splat form lets the compiler keep
+// them in scalar registers and copy them into vector registers inside the loop.
+layout(set = 0, binding = 2) readonly buffer AB { TA ab[]; };
+layout(set = 0, binding = 3) readonly buffer AB2 { TB ab2[]; };
+#endif
+
+void main() {
+#ifdef LOADAB
+    MA a;
+    MB b;
+    coopMatLoad(a, ab, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(b, ab2, 256, 16, gl_CooperativeMatrixLayoutRowMajor);
+#else
+    // Values come from push constants so the compiler cannot fold the products.
+    MA a = MA(TA(pc.av));
+    MB b = MB(TB(pc.bv));
+#endif
+    // The accumulators restart every chunk (from a value that depends on the chunk count, so the chunk cannot be
+    // hoisted) and each chunk's result is added into exact integer totals: an FP32 accumulator stops counting at
+    // 2^22 (FP16) or 2^23 (FP8) multiply-adds of this size, and the oldest wave on a SIMD takes most chunks.
+    uint tot[8] = uint[8](0, 0, 0, 0, 0, 0, 0, 0);
+    MC c0, c1, c2, c3;
+    uint done = 0;
+    uint64_t k0 = clockARB();
+    uint64_t r0 = clockRealtimeEXT();
+    for (;;) {
+        uint ch = next_chunk();
+        if (ch >= pc.chunks) break;
+        TC s0 = TC(done & 3u);
+        c0 = MC(TC(0) + s0);
+        c1 = MC(TC(1) + s0);
+        c2 = MC(TC(2) + s0);
+        c3 = MC(TC(3) + s0);
+        for (uint i = 0; i < pc.iters; i++) {
+            c0 = MMA(a, b, c0); c1 = MMA(a, b, c1);
+            c2 = MMA(a, b, c2); c3 = MMA(a, b, c3);
+            c0 = MMA(a, b, c0); c1 = MMA(a, b, c1);
+            c2 = MMA(a, b, c2); c3 = MMA(a, b, c3);
+            c0 = MMA(a, b, c0); c1 = MMA(a, b, c1);
+            c2 = MMA(a, b, c2); c3 = MMA(a, b, c3);
+            c0 = MMA(a, b, c0); c1 = MMA(a, b, c1);
+            c2 = MMA(a, b, c2); c3 = MMA(a, b, c3);
+        }
+        for (int e = 0; e < c0.length(); e++)
+            tot[e] += uint(int(c0[e])) + uint(int(c1[e])) + uint(int(c2[e])) + uint(int(c3[e]));
+        done++;
+    }
+    write_info(done, k0, r0);
+#ifndef UNUSED
+    uint base = global_subgroup() * 1024u;
+    for (int e = 0; e < c0.length(); e++) outu[base + uint(e) * gl_SubgroupSize + gl_SubgroupInvocationID] = tot[e];
+#endif
+}

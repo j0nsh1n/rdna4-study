@@ -1,0 +1,7 @@
+#version 450
+// Item 7: a dispatch that writes one value.
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Out { uint res[]; };
+void main() {
+    if (gl_GlobalInvocationID.x == 0u) res[0] = 1u;
+}

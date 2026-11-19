@@ -1,0 +1,31 @@
+# expectations for src/study/lds_stage.hip. k_feed<V>: 4 blocks of 4 stages (16 matrix instructions) per timed-loop
+# iteration; clang unrolls the repetition loop, so the timed loop appears 7 times (REPS + 1).
+.* scratch == 0
+k_feedILi0EE loop v_wmma_f32_16x16x16_f16\s == 112
+k_feedILi0EE loop v_wmma == 112
+k_feedILi0EE loop global_load == 0
+k_feedILi0EE loop ds_load == 0
+k_feedILi1EE loop v_wmma_f32_16x16x16_f16\s == 112
+k_feedILi1EE loop v_wmma == 112
+k_feedILi1EE loop ds_load_b128\s == 224
+k_feedILi1EE loop s_wait_dscnt\s4$ == 112
+k_feedILi1EE loop global_load == 0
+k_feedILi2EE loop v_wmma_f32_16x16x16_f16\s == 112
+k_feedILi2EE loop v_wmma == 112
+k_feedILi2EE loop global_load_b128\s == 112
+k_feedILi2EE loop global_load_tr_b128\s == 112
+k_feedILi2EE loop s_wait_loadcnt\s4$ == 112
+k_feedILi3EE loop v_wmma_f32_16x16x16_fp8_fp8\s == 112
+k_feedILi3EE loop v_wmma == 112
+k_feedILi3EE loop global_load == 0
+k_feedILi3EE loop ds_load == 0
+k_feedILi4EE loop v_wmma_f32_16x16x16_fp8_fp8\s == 112
+k_feedILi4EE loop v_wmma == 112
+k_feedILi4EE loop ds_load_b64\s == 224
+k_feedILi4EE loop s_wait_dscnt\s4$ == 112
+k_feedILi4EE loop global_load == 0
+k_feedILi5EE loop v_wmma_f32_16x16x16_fp8_fp8\s == 112
+k_feedILi5EE loop v_wmma == 112
+k_feedILi5EE loop global_load_b64\s == 112
+k_feedILi5EE loop global_load_tr_b64\s == 112
+k_feedILi5EE loop s_wait_loadcnt\s4$ == 112

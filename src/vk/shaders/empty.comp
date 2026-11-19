@@ -1,0 +1,4 @@
+#version 450
+// Item 7: a dispatch that does nothing.
+layout(local_size_x_id = 0) in;
+void main() {}

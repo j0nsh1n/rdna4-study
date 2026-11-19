@@ -1,0 +1,12 @@
+# expectations for scripts/haz_maskscan.py on src/study/haz_mask.hip
+# clean: operands and matrix instruction run by the whole wave
+^k_sink wmma == 0
+^k_select wmma == 0
+^k_uniform wmma == 0
+# masked by the source: per-lane if, early return, per-lane trip count, inline assembly with EXEC set
+# (k_asm_time: 4 timed repetitions of 64, unrolled)
+^k_ifload wmma == 1
+^k_early wmma == 1
+^k_loop wmma == 1
+^k_asm\( wmma == 1
+^k_asm_time wmma == 256

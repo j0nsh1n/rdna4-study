@@ -1,0 +1,79 @@
+#version 450
+// Gaming-round fix (E1-E3): a dense FMA load in which every wave works until its own time bound. One chunk is 8
+// blocks of 16 independent v_fma_f32 (x = x * a + b, a and b per lane in VGPRs, so no SGPR operands and no
+// fmac/VOPD form); every `every` chunks every wave reads REALTIME and its cycle counter, ends when REALTIME has
+// passed its own start + stop_ticks or when the host has set the stop word (the 88 C tripwire; see Ctl below). There
+// is no division in the loop. Subgroup 0 of every group writes its start and end (REALTIME, cycles, chunks done); subgroup 0 of
+// every rec_stride-th group also writes a (REALTIME, cycles) record at every check. The HIP twin
+// (src/study/dense_twin.hip) runs the same loop; both listings are checked by the script.
+#include "gcommon.glsl"
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Res { float res[]; };   // [0, 128): a, b per lane; [128, ...): results
+layout(set = 0, binding = 1) buffer Rec { uvec4 rec[]; };
+layout(set = 0, binding = 2) buffer Grp { uvec4 grp[]; };   // per group: start (rt, cyc), end (rt, cyc), (chunks, ...)
+// The stop word is written by the host into 4,096 cache lines (128 bytes apart); a check reads the line of the current
+// 82 us slot of REALTIME, so a line first read after the host's write comes from memory and not from a stale copy in
+// L2 (a single word kept being served from L2: development run dev2-232334).
+layout(set = 0, binding = 3) coherent volatile buffer Ctl { uint stop_words[]; } ctl;
+layout(push_constant) uniform PC {
+    uint chunks;      // upper bound on chunks
+    uint every;       // chunks between checks
+    uint stop_lo;     // REALTIME ticks each wave runs from its own start (0 = no time bound)
+    uint stop_hi;
+    uint rec_stride;  // groups with id % rec_stride == 0 record a timeline (0 = none)
+    uint rec_base;    // first record of this dispatch
+    uint maxrec;      // records per recording wave
+    uint grp_base;    // first group-table entry of this dispatch
+    uint skew;        // deliberate break: odd groups stop after a tenth of the time bound
+    uint rec_every;   // a recording wave writes a record at every rec_every-th check
+} pc;
+
+#define F(x) x = fma(x, a, b);
+#define F16 F(x0) F(x1) F(x2) F(x3) F(x4) F(x5) F(x6) F(x7) F(x8) F(x9) F(x10) F(x11) F(x12) F(x13) F(x14) F(x15)
+
+void main() {
+    const uint lane = gl_SubgroupInvocationID;
+    const float a = res[2u * (gl_LocalInvocationIndex & 63u)], b = res[2u * (gl_LocalInvocationIndex & 63u) + 1u];
+    float x0 = float(lane) * 1e-3, x1 = x0 + 0.01, x2 = x0 + 0.02, x3 = x0 + 0.03, x4 = x0 + 0.04, x5 = x0 + 0.05,
+          x6 = x0 + 0.06, x7 = x0 + 0.07, x8 = x0 + 0.08, x9 = x0 + 0.09, x10 = x0 + 0.10, x11 = x0 + 0.11,
+          x12 = x0 + 0.12, x13 = x0 + 0.13, x14 = x0 + 0.14, x15 = x0 + 0.15;
+    const bool w0 = gl_SubgroupID == 0u;
+    const bool recw = w0 && pc.rec_stride != 0u && (gl_WorkGroupID.x % pc.rec_stride) == 0u;
+    const uint ridx = pc.rec_base + (pc.rec_stride != 0u ? gl_WorkGroupID.x / pc.rec_stride : 0u) * pc.maxrec;
+    uint64_t lim = uint64_t(pc.stop_lo) | (uint64_t(pc.stop_hi) << 32);
+    if (pc.skew != 0u && (gl_WorkGroupID.x & 1u) == 1u) lim /= 10ul;
+    const uint64_t r0 = clockRealtimeEXT();
+    const uint64_t c0 = clockARB();
+    uint n = 0u, left = pc.every, rleft = pc.rec_every, done = 0u;
+    for (uint ch = 0u; ch < pc.chunks; ch++) {
+        F16 F16 F16 F16 F16 F16 F16 F16
+        done++;
+        left--;
+        if (left == 0u) {
+            left = pc.every;
+            const uint64_t r = clockRealtimeEXT();
+            const uint64_t c = clockARB();
+            rleft--;
+            if (rleft == 0u) {
+                rleft = pc.rec_every;
+                if (recw && n < pc.maxrec) {
+                    if (subgroupElect()) rec[ridx + n] = uvec4(uint(r), uint(r >> 32), uint(c), uint(c >> 32));
+                    n++;
+                }
+            }
+            if ((lim != 0ul && r - r0 >= lim) || ctl.stop_words[(uint(r >> 13) & 4095u) * 32u] != 0u) break;
+        }
+    }
+    const uint64_t r1 = clockRealtimeEXT();
+    const uint64_t c1 = clockARB();
+    if (w0 && subgroupElect()) {
+        const uint g = pc.grp_base + gl_WorkGroupID.x;
+        grp[3u * g] = uvec4(uint(r0), uint(r0 >> 32), uint(c0), uint(c0 >> 32));
+        grp[3u * g + 1u] = uvec4(uint(r1), uint(r1 >> 32), uint(c1), uint(c1 >> 32));
+        grp[3u * g + 2u] = uvec4(done, n, 1u, 0u);
+    }
+    // lane 0 of every wave: its chunk count (the load's density over all waves); other lanes: the chains' sum. Each
+    // dispatch of an arm writes its own slice (grp_base = burst x groups), so every burst's fill can be computed.
+    const float xs = x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9 + x10 + x11 + x12 + x13 + x14 + x15;
+    res[128u + pc.grp_base * gl_WorkGroupSize.x + gl_GlobalInvocationID.x] = lane == 0u ? uintBitsToFloat(done) : xs;
+}

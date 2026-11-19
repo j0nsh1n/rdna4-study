@@ -1,0 +1,57 @@
+# KFD topology of the RX 7900 XT (gfx1100), read from /sys/class/kfd/kfd/topology/nodes/1 on 2026-11-16
+# Baseline to compare with the RX 9070 XT after the swap. Read-only sysfs; no GPU load.
+# kernel: 7.3.4-201.nobara.fc44.x86_64
+
+## properties
+cpu_cores_count 0
+simd_count 168
+mem_banks_count 1
+caches_count 178
+io_links_count 1
+p2p_links_count 1
+cpu_core_id_base 0
+simd_id_base 2147487744
+max_waves_per_simd 16
+lds_size_in_kb 64
+gds_size_in_kb 0
+num_gws 64
+wave_front_size 32
+array_count 12
+simd_arrays_per_engine 2
+cu_per_simd_array 8
+simd_per_cu 2
+max_slots_scratch_cu 32
+gfx_target_version 110000
+vendor_id 4098
+device_id 29772
+num_sdma_engines 2
+num_sdma_xgmi_engines 0
+num_sdma_queues_per_engine 6
+num_cp_queues 8
+cwsr_size 40288256
+ctl_stack_size 32768
+max_engine_clk_fcompute 2129
+local_mem_size 0
+fw_version 2680
+capability 2818810496
+capability2 0
+debug_prop 1495
+sdma_fw_version 27
+num_xcc 1
+max_engine_clk_ccompute 5582
+
+## caches: count by (level, size in KB, line size, type bits)
+     41 level 1 size_kb 16 line 64 type 9
+     12 level 1 size_kb 256 line 128 type 9
+     41 level 1 size_kb 32 line 128 type 10
+     82 level 1 size_kb 32 line 128 type 9
+      1 level 2 size_kb 6144 line 128 type 9
+      1 level 3 size_kb 81920 line 64 type 9
+
+## one cache entry of each kind, with its sibling map length
+[level 1] processor_id_low 2147487746 level 1 size 32 cache_line_size 128 cache_lines_per_tag 0 association 0 latency 0 type 9 sibling_map 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 
+[level 2] processor_id_low 2147487746 level 2 size 6144 cache_line_size 128 cache_lines_per_tag 0 association 0 latency 0 type 9 sibling_map 1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1
+[level 3] processor_id_low 2147487746 level 3 size 81920 cache_line_size 64 cache_lines_per_tag 0 association 0 latency 0 type 9 sibling_map 1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1
+
+## memory banks
+0: heap_type 1 size_in_bytes 21458059264 flags 0 width 320 mem_clk_max 1249 

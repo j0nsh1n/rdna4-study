@@ -1,0 +1,17 @@
+# expectations for scripts/haz_hazscan.py on src/study/haz_hazard.hip
+# every builtin shape keeps a VALU between a matrix result and its use as A or B
+^h_straight hazard == 0
+^h_bsrc hazard == 0
+^h_loop hazard == 0
+^h_branch hazard == 0
+^h_mixed hazard == 0
+^h_call\( call == 0
+^h_call2 call == 0
+# the deliberate break: inline assembly without the V_NOP
+^h_asm_raw hazard == 1
+^h_asm_nop hazard == 0
+# the missed case: a callee that returns right after its matrix instruction, into a caller whose next
+# instruction is a matrix instruction reading that result
+^first_mm_tied return == 1
+^h_call3 call == 1
+^h_call4 call == 1

@@ -1,0 +1,38 @@
+#version 450
+// P4: a burst of dependent FMA chains (2 per lane; a, b uniform, so plain VOP3 v_fma_f32 without dual issue). Subgroup
+// 0 of group 0 records REALTIME and the cycle counter every `every` iterations (one wave only: never many waves).
+#include "gcommon.glsl"
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Out { float res[]; };
+layout(set = 0, binding = 1) buffer Rec { uvec4 rec[]; };
+layout(push_constant) uniform PC {
+    uint iters;
+    uint every;
+    uint rec_base;
+    uint maxrec;
+    float a;
+    float b;
+} pc;
+void main() {
+    bool r = gl_WorkGroupID.x == 0u && gl_SubgroupID == 0u;
+    float x0 = float(gl_LocalInvocationIndex) * 1e-3, x1 = x0 + 0.5;
+    uint n = 0u;
+    for (uint i = 0u; i < pc.iters; i++) {
+        x0 = fma(x0, pc.a, pc.b);
+        x1 = fma(x1, pc.a, pc.b);
+        x0 = fma(x0, pc.a, pc.b);
+        x1 = fma(x1, pc.a, pc.b);
+        if (r && (i % pc.every) == 0u && n < pc.maxrec) {
+            uint64_t t = clockRealtimeEXT();
+            uint64_t c = clockARB();
+            if (subgroupElect()) rec[pc.rec_base + n] = uvec4(uint(t), uint(t >> 32), uint(c), uint(c >> 32));
+            n++;
+        }
+    }
+    if (r) {
+        uint64_t t = clockRealtimeEXT();
+        uint64_t c = clockARB();
+        if (subgroupElect() && n < pc.maxrec) rec[pc.rec_base + n] = uvec4(uint(t), uint(t >> 32), uint(c), uint(c >> 32));
+    }
+    res[gl_GlobalInvocationID.x] = x0 + x1;
+}

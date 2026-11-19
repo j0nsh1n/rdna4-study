@@ -1,0 +1,30 @@
+# expectations for src/study/mat_card.hip (scripts/mem_loopcheck.py)
+.* scratch == 0
+# register-only kernels: exactly 16 of the kernel's own WMMA in the loop and no other v_wmma
+reg_kernelILi0E loop v_wmma_f32_16x16x16_f16\s == 16
+reg_kernelILi0E loop v_wmma == 16
+reg_kernelILi1E loop v_wmma_f32_16x16x16_bf16\s == 16
+reg_kernelILi1E loop v_wmma == 16
+reg_kernelILi2E loop v_wmma_f32_16x16x16_fp8_fp8\s == 16
+reg_kernelILi2E loop v_wmma == 16
+reg_kernelILi3E loop v_wmma_i32_16x16x16_iu8\s == 16
+reg_kernelILi3E loop v_wmma == 16
+# 4-bit and sparse register-only kernels: same loop, 16 instructions of the kernel's own form and no other matrix instruction
+reg_kernel_xILi4E loop v_wmma_i32_16x16x16_iu4\s == 16
+reg_kernel_xILi4E loop v_wmma == 16
+reg_kernel_xILi5E loop v_wmma_i32_16x16x32_iu4\s == 16
+reg_kernel_xILi5E loop v_wmma == 16
+reg_kernel_xILi6E loop v_swmmac_f32_16x16x32_f16\s == 16
+reg_kernel_xILi6E loop v_swmmac == 16
+reg_kernel_xILi7E loop v_swmmac_f32_16x16x32_fp8_fp8\s == 16
+reg_kernel_xILi7E loop v_swmmac == 16
+reg_kernel_xILi8E loop v_swmmac_i32_16x16x32_iu8\s == 16
+reg_kernel_xILi8E loop v_swmmac == 16
+# memory-fed kernels: operands are loaded inside the loop
+mem_kernelILi0E loop global_load >= 4
+mem_kernelILi0E loop v_wmma >= 4
+mem_kernelILi1E loop global_load >= 4
+mem_kernelILi1E loop v_wmma >= 4
+# FMA load: the accumulate form pairs every FMA of the loop as v_dual_fmac_f32 (2 FMAs per instruction)
+fma_kernel loop v_dual_fmac_f32 >= 32
+fma_kernel loop v_fma_f32 == 0

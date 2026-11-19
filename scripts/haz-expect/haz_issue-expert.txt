@@ -1,0 +1,2 @@
+# expectations for src/study/haz_issue.hip built with -mllvm --amdgpu-expert-scheduling-mode
+.* kernel s_setreg_imm32_b32\shwreg\(HW_REG_WAVE_SCHED_MODE == 1

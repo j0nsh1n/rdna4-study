@@ -1,0 +1,11 @@
+# expectations for src/widen_cache.hip (scripts/mem_loopcheck.py): each timed loop reads 16 bytes per thread and writes 16
+# (read, write) or 32 (widen), with no spill and no other memory instruction in the loop
+.* scratch == 0
+widen_kernel loop global_load_b128\s == 1
+widen_kernel loop global_store_b128\s == 2
+widen_kernel loop global_(load|store)_(b8|b16|b32|b64|d16\S*)\s == 0
+read_kernel loop global_load_b128\s == 1
+read_kernel loop global_store == 0
+write_kernel loop global_store_b128\s == 1
+write_kernel loop global_load == 0
+widen_kernel vgpr <= 24

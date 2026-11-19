@@ -1,0 +1,56 @@
+# expectations for src/study/lds_smem.hip (scripts/mem_loopcheck.py); the timed loops of every probe
+# calib: 16 FMA per block, U blocks per iteration, nothing else
+k_calibILi4EE loop v_fma_f32\s == 64
+k_calibILi8EE loop v_fma_f32\s == 128
+k_calib scratch == 0
+# chase: the warm-up loop and the timed loop each hold 4 chase steps
+k_chase loop s_load_b64\s == 8
+# the loop finder also sees two epilogue pseudo-loops and the warm-up loop has one extra compiler wait; the timed loop is exactly 4 loads + 4 waits
+k_chase loop s_wait_kmcnt\s0 >= 8
+k_chase scratch == 0
+# width: one batch = N loads and one s_wait_kmcnt; no vector or scratch operation, nothing but my wait in the loop
+k_widthILi0ELi31EE loop s_load_b32\s == 31
+k_widthILi0ELi31EE loop s_wait_kmcnt == 1
+k_widthILi1ELi31EE loop s_load_b64\s == 31
+k_widthILi2ELi16EE loop s_load_b96\s == 16
+k_widthILi3ELi16EE loop s_load_b128\s == 16
+k_widthILi4ELi8EE loop s_load_b256\s == 8
+k_widthILi5ELi4EE loop s_load_b512\s == 4
+k_widthILi6ELi31EE loop s_load_u8\s == 31
+k_widthILi7ELi31EE loop s_load_u16\s == 31
+k_widthILi1ELi1EE loop s_wait_kmcnt == 1
+k_width loop s_wait_(loadcnt|storecnt|dscnt) == 0
+k_width scratch == 0
+# lat: 8 unrolled repetitions of a loop of 4 steps
+k_latILi0EE loop s_load_b32\s == 32
+k_latILi2EE loop v_readfirstlane_b32 == 32
+k_latILi3EE loop v_add_nc_u32 == 32
+k_lat loop s_wait_(loadcnt|storecnt|dscnt) == 0
+k_lat scratch == 0
+# mixed: no loops (repetitions unrolled); kernel-wide counts
+k_mixedILi16ELi0EE kernel global_load_b128\s == 144
+k_mixedILi32ELi0EE kernel global_load_b128\s == 288
+k_mixedILi32ELi1EE kernel global_load_b128\s == 288
+k_mixed kernel s_wait_loadcnt\s0 == 9
+k_mixed scratch == 0
+k_mixedILi32ELi1EE vgpr >= 136
+# scratch chains: the private segment exists, 4 round trips per loop iteration, one load wait each
+k_scr scratch >= 1
+k_scrILi0EE loop scratch_store_b32\s == 32
+k_scrILi0EE loop scratch_load_b32\s == 32
+k_scrILi0EE loop s_wait_loadcnt\s0 == 32
+k_scrILi0EE loop s_wait_storecnt == 0
+k_scrILi1EE loop s_wait_storecnt\s0 == 32
+k_scrILi2EE loop scratch_store_b128\s == 32
+k_scrILi2EE loop scratch_load_b128\s == 32
+k_scrILi3EE loop scratch_ == 0
+k_scr_tpILi0ELi1EE loop scratch_load_b32\s == 16
+k_scr_tpILi1ELi1EE loop scratch_load_b128\s == 16
+k_scr_tpILi0ELi1EE loop s_wait_loadcnt\s0 == 1
+k_scr_tp scratch >= 1
+# spills
+k_spill_array kernel scratch_store_b128\s >= 1
+k_spill_array kernel scratch_load_b32\s >= 8
+k_spill_regs kernel scratch_store_b32\s >= 40
+k_spill_regs kernel scratch_load_b32\s >= 40
+k_spill_regs scratch >= 1

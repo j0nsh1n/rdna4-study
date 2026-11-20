@@ -1097,6 +1097,11 @@ named where its notes record them. Each item answers or narrows an open point of
   overclocked profile). So for this kernel the lost waves cost more than the hidden latency gains; the occupancy curve
   of `m1_out_c` (flat from 9 to 8 waves) does not carry over. A one-step-ahead touch of the next history rows was
   2.6 % slower on the synthetic case, whose motion is random (INFERRED: a real game's smaller motion could differ).
+- **The native Windows driver does not have these two costs** (READ, the upscaler's maintainer, 2026-11-20, RX 9070 XT,
+  Windows driver 32.0.32015.7029): for the same DXIL, the Windows driver already emits 16-byte loads for the
+  `Load4` sites above and allocates 192 VGPRs for `m2_net_12` and the Swin kernels, and the upscaler's three changes
+  (16-byte masks, the bottleneck's load order) measured byte-identical and within timing noise there. So the load-width
+  split and the 192-VGPR misses are properties of the RADV/ACO route, not of the hardware.
 - **GE-Proton 11-12** (pair A's row): its own vkd3d-proton creates exactly the same kernels as 11-11's: 42 of the
   upscaler's 157 compute kernels; 85 are refused with `0x80070057` and 30 crash the process (on both). MEASURED (upscaler), `pso_sweep` per kernel, system wine 11.21, only the D3D12 pair changed per arm.
   Pair 1 creates 155 of 157 (two reference-route kernels crash dxil-spirv on every pair).

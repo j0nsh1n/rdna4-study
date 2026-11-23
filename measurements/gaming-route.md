@@ -1048,3 +1048,60 @@ by the lead against the raw files where a figure is given:
 - The time in the header of `fix/EXPECTATIONS.md` (22:35) is later than its file time (22:33:51 UTC, before the
   first run at 22:34:04).
 
+
+## Follow-ups from the upscaler work (2026-11-17 to 2026-11-19)
+
+Added 2026-11-19. These come from the upscaler project's own work on the same card and route (Wine, pair 1, RADV),
+done after this write-up; the runs and their notes are in that project's work folders, not here. Labels as above;
+"MEASURED (upscaler)" means measured there, with interleaved arms and byte-identical output checks. Clock profiles are
+named where its notes record them. Each item answers or narrows an open point of this file.
+
+- **RADV's CU or WGP choice for these kernels** (G4 "Not done"): READ, Mesa `radv_should_use_wgp_mode`: compute
+  shaders that use LDS run in CU mode ("LDS is faster with CU mode"). So two 256-lane wave32 workgroups fit on a CU only
+  at 192 VGPRs or fewer (8 waves on its 2 SIMDs), and a kernel just above 192 loses half its workgroups per CU. INFERRED
+  from the rule and the listings.
+- **`m2_net_04`'s register count was the cause** (G4: "occupancy is one candidate, not the shown cause"): ACO's VGPR
+  demand for it before scheduling was 194, two above that step, so it was compiled for one workgroup per CU and grew to
+  256. A source change that only moves a table load one step later (no arithmetic changed) brings it to 192 under the
+  normal ACO, and its time from 260 to 194 us, steady from frame to frame (MEASURED (upscaler), busy-sample clock
+  3.07-3.14 GHz, profile not recorded). That is the `novn` arm's 206-210 us without `novn`'s other code changes, so
+  occupancy was the cause.
+- **Why `m2_post_c` is slower than on the RX 7900 XT** (G1b, "Not measured": open), narrowed: two diagnostic arms that
+  skip the history samples (wrong output, timing only) put the history look-ups at about 212 of 596 us; without them the
+  kernel takes about 383 us, close to the RX 7900 XT's whole-kernel 378 us. Each wave runs up to four dependent
+  12-texel history reads per step. INFERRED: the RDNA 4 slowdown sits in those dependent reads; the RX 7900 XT has not
+  been run with the same diagnostics. About a third of the remaining gap is workgroup count against WGPs (768 large
+  workgroups, 4 per WGP; 32 WGPs here, 42 on the RX 7900 XT; INFERRED). Reading the history taps as 8-byte pieces
+  (`Load2` at an address with the low 3 bits cleared, an identity because every offset is a multiple of 8) gave
+  616 -> 596 us (MEASURED (upscaler)). Overlapping the two history candidates needs 132-144 VGPRs against 84 (round 3 of
+  that work times it; not settled).
+- **Load width through dxil-spirv and ACO** (new): an HLSL `RWByteAddressBuffer.Load4` is known to be 4-byte aligned
+  only, and on this route each one compiles to four `global_load_b32` with four address additions (READ, listings). When
+  the address is in fact 16-byte aligned, clearing its low 4 bits (`(base + off) & ~15`) lets ACO emit one 16-byte load
+  instead: model 1's narrow network stages lost 10-16 % of their instructions (READ, listings), VGPRs unchanged, and the
+  model 1 frame's kernel sum went from 1540 to 1516 us at 1706x960 -> 2560x1440 (-24 us, -1.6 %; 240 interleaved frames
+  per arm, busy-sample clock about 2.97 GHz, overclocked "Default" profile; MEASURED (upscaler)). This is the D3D12
+  counterpart of the masked-address result for HIP in `compiler-and-hazards.md`. Open: in other kernels Mesa did not
+  merge masked 8- or 16-byte loads (the Swin kernels', round 1 of that work); why is not known.
+- **`m2_net_12` (the persistent bottleneck kernel) at the register step too** (G1b, G4): under ACO it was allocated
+  256 VGPRs (5 waves per SIMD). Its peak was not one spot: in the fused patch-merge phase every 16-read fragment batch
+  sat on 172-190 live registers, and the attention part had one spot at 193 (`ACO_DEBUG=liveinfo`, READ). Two
+  load-order changes in the upscaler (fragments read inside the K loop; the second weight stripe's loads made to depend
+  on the first merge pass through an address term that is zero at run time, so ACO cannot hoist them, and smaller
+  fragment batches) bring it to 192 VGPRs and 8 waves, with no arithmetic changed: 487.2 -> 407.7 us, model 2's summed
+  GPU dispatch time per frame 2609.6 -> 2499.9 us (-4.2 %), byte-identical output (MEASURED (upscaler), one runtime
+  DLL, only that kernel's code swapped, busy-sample clock 3.05-3.09 GHz, overclocked "Default" profile). A source-level
+  move of the loads alone did not help: ACO hoisted them back (READ, listings).
+- **`m2_post_c` sits at the occupancy knee, unlike `m1_out_c`** (G1 continued): variants that overlap its two history
+  candidates need 132-144 VGPRs against 84 and ran 27-29 % slower (MEASURED (upscaler), byte-identical, interleaved,
+  overclocked profile). So for this kernel the lost waves cost more than the hidden latency gains; the occupancy curve
+  of `m1_out_c` (flat from 9 to 8 waves) does not carry over. A one-step-ahead touch of the next history rows was
+  2.6 % slower on the synthetic case, whose motion is random (INFERRED: a real game's smaller motion could differ).
+- **The native Windows driver does not have these two costs** (READ, the upscaler's maintainer, 2026-11-20, RX 9070 XT,
+  Windows driver 32.0.32015.7029): for the same DXIL, the Windows driver already emits 16-byte loads for the
+  `Load4` sites above and allocates 192 VGPRs for `m2_net_12` and the Swin kernels, and the upscaler's three changes
+  (16-byte masks, the bottleneck's load order) measured byte-identical and within timing noise there. So the load-width
+  split and the 192-VGPR misses are properties of the RADV/ACO route, not of the hardware.
+- **GE-Proton 11-12** (pair A's row): its own vkd3d-proton creates exactly the same kernels as 11-11's: 42 of the
+  upscaler's 157 compute kernels; 85 are refused with `0x80070057` and 30 crash the process (on both). MEASURED (upscaler), `pso_sweep` per kernel, system wine 11.21, only the D3D12 pair changed per arm.
+  Pair 1 creates 155 of 157 (two reference-route kernels crash dxil-spirv on every pair).

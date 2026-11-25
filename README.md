@@ -155,7 +155,9 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   party's exact rewrite of the load order gave matching picture fingerprints and came out 2.2 to 4.1 % faster at Balanced (0.1 to 2.4 %
   at Ultra Performance) on this card, on a noisy session, against 7.2 to 9.6 % reported for moving Balanced on Windows. By that project's
   own scanner, RADV's compiler output shows no serialized load waits in any of the 12 model passes; compile counts are published, AMD's
-  shader code is not.
+  shader code is not. Timed per dispatch with that project's kit (one instrumented run), the first and last full-size dispatches took
+  48 % of the dispatch time at 1080p and 60 % at 1440p and 4K, the 12 dispatches inferred to be the model passes 48 % and 36 %, and
+  the 13 small dispatches under 1 %.
   ([round8.md](measurements/round8.md))
 - **Loads come back in the order they were issued, and a load that lands during FP8 matrix work costs its wave about 25 cycles.**
   In every pattern tested, a wait that allows one load still out returned only when the older load had arrived (195,840 lane checks,
@@ -250,7 +252,7 @@ script to check them against new raw data.
 | `vulkan-view.md` | The same hardware through Vulkan compute and RADV. |
 | `fsr4-predictions.md` | Predictions for the cost of FSR 4, written before any measurement. |
 | `round7.md` | Round 7: the memory clock under load (1408 MHz, unlocked), 32- against 64-wide waves, and FSR 4 cost seen from the outside with AMD's SDK sample. |
-| `round8.md` | Round 8: FSR 4.1.2 cost per size and preset, the timing-kit result, an observed slowdown with a lower memory clock, and a look at how the compiler built its passes (counts only, no AMD shader code); withdraws round 7's clock-scaled FSR estimate. |
+| `round8.md` | Round 8: FSR 4.1.2 cost per size and preset, the timing-kit result, a time for each of its 28 dispatches (one instrumented run, names inferred), an observed slowdown with a lower memory clock, and a look at how the compiler built its passes (counts only, no AMD shader code); withdraws round 7's clock-scaled FSR estimate. |
 | `round9.md` | Round 9: load order, loads beside matrix work (raw tables and a one-wave load ratio), data across dispatches (observations), the core clock at a fixed cadence and under `profile_standard`, and memory bandwidth at 1408 MHz. |
 | `leftovers-c-a.md` | Follow-up probes of the execution core, memory, LDS, and compiler hazards. |
 | `leftovers-c-b.md` | Follow-up probes of matrix rules, scheduling, special loads, Vulkan, and arithmetic error. |

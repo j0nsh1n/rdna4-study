@@ -36,7 +36,11 @@ Each bullet carries its own label.
 - **MEASURED:** the Linux compiler (ACO) has no serialized load waits by PR 57's scan in any of the 12 model passes at any of the 3 sizes (36 rows). **READ:** PR 57's
   Windows-compiler output has 24 to 39 in five passes (4.1.1 table) and 110 in pass 9 (4.1.2 example; 113 in the 4.1.1 table). **INFERRED:** this fits the smaller gain
   here. **MEASURED against READ:** ACO uses more registers, and pass 9 has a static limit of 12 waves per SIMD where PR 57's figures give 16.
-- **Not obtained:** a time per pass; that tool is missing.
+- **MEASURED:** the timing kit's `--passes` mode gives a time for each of the 28 dispatches of one upscale call (moving Balanced, one run, instrumented with timestamp queries, on the overclocked card). On AMD's 4.1.2,
+  dispatches 1 and 27 (full-size grids) took 48 % of the dispatch time at 1080p and 60 % at 1440p and 4K, the 12 odd dispatches 3-25 took 48 % at 1080p and 36 % at 1440p and 4K, and the 13 one-row even dispatches 2-26
+  took under 1 %. From the first dispatch's start to the call-end timestamp, the exact rewrite changed the total by -0.7 % (1080p), -0.8 % (1440p) and +0.1 % (4K) in this run, against -3.5, -3.6 and -2.2 % for the kit's
+  earlier noisy normal-run means; these totals do not depend on which dispatch is which pass, and the measurements do not isolate a cause for the difference. **INFERRED** (from dispatch order and grid sizes, not from any
+  name in the DLL): dispatches 1 and 27 are the prepass and postpass, the odd dispatches 3-25 are model passes 1 to 12, the even dispatches 2-26 are the 13 small post shaders, and dispatch 0 is the extra small shader; see "Per-step timing".
 
 ## Setup
 
@@ -207,6 +211,82 @@ The percentages are worked out here from the rounded kit figures. The rows witho
   moving) is larger than the rewrite's gain at the small sizes.
 - The kit ran Linux, so AMD's 4.1.2 shaders were compiled by RADV's ACO, not by AMD's Windows compiler. That is the lead into the next part (INFERRED).
 
+## Per-step timing (the timing kit's --passes mode)
+
+**What was run (MEASURED; folder `runs/20261125T0250Z-r8passes/`, git-ignored; run on 2026-11-24, local evening).** The project's own timing kit (`zgauthier2000/fsr4-shader-performance-overrides`, kit
+2026-11-14) in `--passes` mode with `FSR4TIME_PASSESONLY=1` and `FSR4_PASSLIST=r4-amd-412-reference,r4-exact-412-test`, hidden (gamescope headless), GE-Proton11-14, the card above on the same
+overclocked profile. Moving scene, Balanced, 1080p, 1440p and 4K output, 200 timed frames per DLL and size (100 in the kit's even group and 100 in its odd group, after 40 warm-up frames); the figures are the mean of the even and the odd group. **READ** (the kit's `fsr4time.c`, lines 589-640): it replaces
+`Dispatch` in the command list's function table and writes a GPU timestamp before and after every dispatch the DLL records. The kit reports, per dispatch, the mean time of the dispatch and the mean time from
+its end to the next dispatch's start (the "gap"). For the last dispatch (`fsr4time.c:774`) the gap runs from its end timestamp to the call-end timestamp. The interval from the call's start to the first dispatch's start is not printed, so the dispatch times plus all the gaps span the first dispatch's start to the call end, which is what the totals below are labelled. Every number below comes from `analyse_passes.py` in that folder (standard library, `python3 -I`; output in `analyse_passes.out`).
+The kit saw 28 dispatches in every cell, with the same reported group counts for both DLLs and both frame groups. The kit waits on a fence after every call.
+
+**Limits.** One run. The only repeat is even against odd frames. The card is overclocked (+150 MHz, -50 mV, raised cap), so microseconds describe this card in that state. The added timestamp queries may perturb GPU scheduling (the kit's own source says they may disturb the totals), so these shares describe the instrumented run, not the normal run. The core clock during this run is unverified.
+
+**Which dispatch is which pass (INFERRED).** The DLL gives no names. The reading used here: dispatch 1 is the prepass, dispatch 27 the postpass, the odd dispatches 3, 5, ..., 25 are model passes 1 to 12 in order,
+the even dispatches 2, 4, ..., 26 are the 13 small "post" shaders, and dispatch 0 is a small first dispatch (the extra small shader of "Inside"; small in code, but it takes 10.6 to 63 us and grows with the output size). Evidence: the order; dispatches 1 and 27 have the full output size as
+their grid (30x540 groups at 1080p, 40x720, 60x1080); the 13 even-index slots d2 to d26 are one-row grids of 47-94 groups at 1080p, 214-848 at 1440p and 47-188 at 4K, with times of 0.15-0.17 us each; and the inside capture has 28 shaders (12 model + 2 pre/post + 14 small).
+It is not a measurement of which shader ran.
+
+**Totals against the kit's normal run (MEASURED, reference).** The normal figure is the kit's whole-call mean from report DE4301C9 (moving Balanced, `r4-amd-412-reference`, READ from the report). The totals here span the first dispatch's start to the call-end timestamp and leave out the interval before the first dispatch.
+
+| output | dispatches | gaps | first dispatch to call end | normal kit whole call | difference |
+|---|---|---|---|---|---|
+| 1920x1080 | 301.4 us | 29.7 us | 331.1 us | 341 us | -2.9 % |
+| 2560x1440 | 635.1 us | 38.0 us | 673.1 us | 693 us | -2.9 % |
+| 3840x2160 | 1498.3 us | 34.0 us | 1532.4 us | 1567 us | -2.2 % |
+
+Gaps are 9.0 %, 5.6 % and 2.2 % of that interval; the last dispatch's trailing gap is 3.4, 4.8 and 4.1 us of them. They include (INFERRED) the cost of the timestamps themselves and any barrier between steps. **The totals come out 2-3 % below the whole-call figure; the cause of the difference is not separated.** Not separated (none tested): the interval before the first dispatch, which the rows do not hold; the two runs' different clock and temperature states (the normal session was flagged NOISY); and the effect of the timestamps.
+
+**Shares of the dispatch time (MEASURED numbers; their names INFERRED).** Reference, mean of even and odd.
+
+| | 1080p | 1440p | 4K |
+|---|---|---|---|
+| d1, prepass | 66.3 us, 22.0 % | 212.3 us, 33.4 % | 426.5 us, 28.5 % |
+| d27, postpass | 77.3 us, 25.7 % | 166.9 us, 26.3 % | 468.7 us, 31.3 % |
+| d1 + d27 | 47.7 % | 59.7 % | 59.7 % |
+| the 12 odd dispatches 3-25 (model passes) | 145.1 us, 48.1 % | 227.2 us, 35.8 % | 538.1 us, 35.9 % |
+| d0 | 10.6 us, 3.5 % | 26.6 us, 4.2 % | 63.0 us, 4.2 % |
+| the 13 small dispatches 2-26 | 2.10 us, 0.70 % | 2.04 us, 0.32 % | 2.04 us, 0.14 % |
+
+The shares add to 100 %. At 4K the 12 odd dispatches in dispatch order are 94.1, 63.6, 25.1, 32.2, 32.3, 14.7, 25.5, 25.6, 46.6, 31.9, 79.7 and 66.8 us. The two full-size dispatches carry the most time and their share
+rises with the output size from 1080p to 1440p; the 12 odd dispatches together take 36 % of the dispatch time at 1440p and 4K.
+PR 57 reports 93 us each for passes 1, 2 and 12 and equal metrics for them (READ; equal metrics do not establish identical shader code). Here the slots inferred as those passes, d3, d5 and d25, took 94.1, 63.6 and 66.8 us at 4K. At 1080p and 1440p the three are close (18.6, 18.5, 18.1 us and 29.9, 29.5, 28.9 us), with d3 1 to 4 % slower than the others, so the large gap appears only at 4K. The three slots inferred as passes 4, 5 and 10 (32.2, 32.3, 31.9 us) are close to one another, as are the two inferred as 7 and 8 (25.5, 25.6 us). Whether the d3 slot is mislabelled, or the same code takes different time with different input, is not known (INFERRED mapping; compare the open question about `pass1` in "Inside").
+
+**Gaps (MEASURED).** Mean gap after a small dispatch against after the other 14 (the last dispatch's trailing value left out): 0.96 against 0.98 us at 1080p, 0.59 against 1.82 us at 1440p, 0.41 against 1.76 us at 4K. The gap sums are
+12.5 / 7.7 / 5.3 us after the 13 small ones and 17.1 / 30.3 / 28.8 us after the other 15 (trailing value included), at 1080p / 1440p / 4K. So at 1440p and 4K the gap after a small dispatch is a quarter to a third of the gap after a big one; at 1080p they are alike. Why is not tested.
+
+**The exact rewrite against the reference (MEASURED; one run).**
+
+| | dispatch sum | gaps | first dispatch to call end | the kit's normal run (moving Balanced) |
+|---|---|---|---|---|
+| 1920x1080 | 301.4 -> 297.9 us (-1.1 %) | 29.7 -> 30.9 | 331.1 -> 328.9 us (-0.66 %) | -3.5 % |
+| 2560x1440 | 635.1 -> 630.2 us (-0.8 %) | 38.0 -> 37.6 | 673.1 -> 667.9 us (-0.78 %) | -3.6 % |
+| 3840x2160 | 1498.3 -> 1499.6 us (+0.1 %) | 34.0 -> 34.3 | 1532.4 -> 1533.9 us (+0.10 %) | -2.2 % |
+
+Per dispatch, the biggest single change is d1 at 1080p (-3.0 us, -4.5 %) and 1440p (-4.1 us, -1.9 %), which is the prepass on the inferred reading; at 4K d1 changes by -1.2 us. Among the 12 odd dispatches the changes are mostly within +-1 %; the clearest
+is d13 (pass 6 on the inferred reading): -0.5 us (-7.3 %) at 1440p and -1.3 us (-8.6 %) at 4K, but +0.2 us (+3.3 %) at 1080p. d19 (pass 9, inferred) moves -4.4 %, -1.7 % and +1.2 % at the three sizes. At 4K ten of the 12 odd dispatches are
+slightly slower (+0.3 to +1.2 %). So the rewrite shows a gain in the normal run, a smaller one here at 1080p and 1440p and none at 4K. Possible reasons (INFERRED, none tested): the added timestamps may perturb scheduling; the order of the
+two DLLs in the run and any drift were not separated; one run. The single instrumented run had total changes of -0.66 %, -0.78 % and +0.10 %, and the earlier noisy normal-run means changed by -3.5 %, -3.6 % and -2.2 %; the measurements do not isolate a cause. The 13 small dispatches took 2.04 to 2.10 us combined in both DLLs.
+
+**Even against odd frames (MEASURED).** The first-dispatch-to-call-end totals differ by 0.35 / 0.09 / -0.04 % (reference) and -0.91 / +0.44 / +0.03 % (rewrite) at 1080p / 1440p / 4K. For the 15 non-small dispatches the mean absolute even-odd difference is 0.86 / 0.24 / 0.21 % (reference) and
+0.98 / 0.39 / 0.10 % (rewrite); the largest single difference among those 15 is 6.99 % (reference) and 4.74 % (rewrite), both d0 at 1080p, and 0.97 % (reference) and 2.09 % (rewrite) at 1440p, 0.52 % and 0.25 % at 4K. Over all 28 dispatches the largest even-odd difference per DLL is 6.99 / 6.06 / 6.45 % (reference) and 6.45 / 6.45 / 6.06 % (rewrite) at 1080p / 1440p / 4K. The 13 small dispatches differ by about 6.5 % at a 0.01 us print step (for example 0.15 against 0.16 us). At 4K the 12 odd dispatches differ between even and odd frames by at most 0.40 % (reference) and 0.25 % (rewrite); the largest reference-to-rewrite change among them is d13 (-8.6 %), and the other 11 (+0.3 to +1.2 %, and -0.6 % for d15) each exceed that slot's even-odd difference in either DLL. The two frame groups come from the same run and cannot show variation between runs.
+
+**Against PR 57's per-pass table (READ; ratios and shares only).** PR 57's table (research/rdna4/README.md at commit 470b6c3c) is AMD 4.1.1 at 4K, 1868 MHz stable, from an RGP capture on Windows. Ours is 4.1.2 on the overclocked card, Linux with RADV's ACO compiler, and timestamp queries around dispatches instead of RGP; the core clock during this run is unverified. So absolute microseconds are not comparable (here/PR 57 is 0.41-1.01 per pass), and only the shares of the 11 passes PR 57 lists (pass 3 is not in its table; mine is 25.1 us) are compared:
+
+| pass (inferred slot) | PR 57 us | share of the 11 | here us | share of the 11 | share here / share PR 57 |
+|---|---|---|---|---|---|
+| 1 | 93 | 12.0 % | 94.1 | 18.3 % | 1.53 |
+| 2 | 93 | 12.0 % | 63.6 | 12.4 % | 1.03 |
+| 4, 5, 10 | 50-52 (51 used) | 6.6 % each | 32.2, 32.3, 31.9 | 6.3, 6.3, 6.2 % | 0.94-0.96 |
+| 6 | 35 | 4.5 % | 14.7 | 2.9 % | 0.64 |
+| 7, 8 | 35 | 4.5 % each | 25.5, 25.6 | 5.0 % each | 1.10 |
+| 9 | 114 | 14.7 % | 46.6 | 9.1 % | 0.62 |
+| 11 | 123 | 15.9 % | 79.7 | 15.5 % | 0.98 |
+| 12 | 93 | 12.0 % | 66.8 | 13.0 % | 1.08 |
+
+INFERRED: passes 9 and 6 (slots d19 and d13), the two PR 57 marks with serialized waits at 113 and 39, are the two passes that are relatively fastest here (shares 0.62 and 0.64 of PR 57's). Passes 4, 5, 10 and 11, the others with waits in PR 57's table, sit at 0.94-0.98, so the pattern is not
+clean. It depends on the inferred mapping (and the d3 slot disagrees with the d5 and d25 slots), and it does not show the cause. The differences in version, clock, OS and driver, and tool listed above could each move these shares.
+
 ## Inside: compile statistics and PR 57's scan
 
 **Method (MEASURED).** One captured sample run per output size, on the real card, with vkd3d's shader dump and RADV's compile statistics switched on; the SPIR-V
@@ -279,11 +359,12 @@ three-binding ones and this extra small kernel is probably the 28th dispatch in 
 
 ## What is open
 
-- **Per-pass timing (not obtained).** RADV's GPU tracepoints are compiled out of this Mesa build (the probe's output was empty) and no RGP viewer is installed, so there is no
-  time per pass or per dispatch; replaying the shaders alone needs descriptor layouts and group counts that only a dispatch trace gives. Everything in the "inside" part is
+- **Per-step timing is done once, not settled.** The kit's `--passes` mode (see "Per-step timing") gives a time per dispatch, but from one run, and the names of the dispatches
+  are inferred. RADV's GPU tracepoints are still compiled out of this Mesa build and no RGP viewer is installed, so there is no capture like PR 57's here; nothing
+  yet shows which dispatch is which pass, why the first-dispatch-to-call-end totals sit 2-3 % under the kit's normal whole-call figure, or why the times of d3, d5 and d25 differ (below). Everything in the "inside" part is
   compile-time structure, not time.
 - **Store density:** whether the 32-pixel rows reach memory as full lines needs cache counters.
-- **Which post shader follows which pass, and where the extra small shader runs:** needs a dispatch trace. The identity of pass 1 against PR 57's is unsettled.
+- **Which post shader follows which pass, and where the extra small shader runs:** the per-step timing is consistent with the extra small shader being the first dispatch (d0), but only by order and grid size (INFERRED); a trace that names each dispatch's shader would settle it. The identity of pass 1 against PR 57's is unsettled.
 - **AMD's Windows compiler is not here:** the comparison is ACO's code against PR 57's published counts, not two compiles of the same input.
 - **The disturbed grid cells (an association found for five; one unexplained).** One cell, `r1-1920x1080-quality-fgon`, was flagged by RasterShadow (1.11x its size's median); its memory clock was
   1408 and its cause is unknown. Five cells that the RasterShadow rule misses ran 13-17 % slower in the upscaler than their other repeats: `r2-3840x2160-balanced`,

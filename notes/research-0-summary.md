@@ -18,7 +18,7 @@ the lead re-checked against the source and which are a helper's reading only.
 | [research-8-architecture-and-family.md](research-8-architecture-and-family.md) | The RDNA 4 family, ray tracing and other blocks, AMD's AI claims, successors (gfx1250, gfx13) |
 | [research-9-kernel-driver.md](research-9-kernel-driver.md) | What the Linux driver and the ROCm runtime encode about the chip; power profiles; known bugs |
 | [research-10-compilers.md](research-10-compilers.md) | Every gfx12 feature, hazard, counter limit and cache-control rule in LLVM and Mesa |
-| [guide/](guide/) A to D | A full digest of AMD's RDNA 4 instruction guide, with changes from RDNA 3 per chapter and per opcode group |
+| [AMD's RDNA 4 instruction set guide](https://docs.amd.com/v/u/en-US/rdna4-instruction-set-architecture) | The guide itself. The study's own digest of it is not part of this repository. |
 | [baseline-7900xt-kfd-topology.txt](baseline-7900xt-kfd-topology.txt) | The RX 7900 XT's cache and SIMD table as the driver reports it, saved before the swap |
 | [PLAN.md](PLAN.md) | What is ready on this machine and the checklist for after the swap |
 | [../scripts/first-hour.sh](../scripts/first-hour.sh) | The first-hour checks as one command (card record, build, bandwidth, probes, decode, llama.cpp, libraries); usage in [../scripts/README.md](../scripts/README.md) |

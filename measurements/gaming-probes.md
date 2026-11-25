@@ -38,8 +38,14 @@ The sibling lane, an upscaler on the route games use, is `gaming-route.md`.
   same number of waves, starts at 2.7-2.8 GHz through HIP and at 1.7-1.8 GHz through Vulkan, from one wave to the
   whole card, in 5 of 5 rounds (E1). For this ALU-only loop the start level does not follow the wave count (1 to 2,048
   waves) the way it follows the path; it moves a little with size (the whole card starts about 75-120 MHz lower than
-  one wave). The power profile shown by the driver did not change. MEASURED; which part of the HIP path makes the
+  one wave). The power profile shown by the driver did not change (this file may show only the user's choice, not the workload profile the kernel applies, so it does not rule out a change). MEASURED for the file; which part of the HIP path makes the
   difference is not known.
+  *Update, round 5 (2026-11-20, `round5.md` item G):* on the profile "Default" the same one-wave probe on the graphics queue starts at **2.8 GHz**
+  (2804 to 2805 MHz, 10 of 10 jobs), with or without an idle HIP process holding a queue; it steps up at 34 ms and ends at 3.23 GHz. The 1.7 to 1.8 GHz start above
+  was measured on "Testing". Kernel v7.3 source: KFD requests the COMPUTE workload profile when a process creates its first queue, while the graphics and compute rings
+  return before requesting any profile when overdrive is enabled (this boot's `ppfeaturemask` has it); the profile shown in sysfs is only the user's choice, so
+  "did not change" above is not evidence about the active workload. That source reading does not explain the "Testing" against "Default" difference. What moves the start
+  clock between the two profiles is open.
 - **When the clock steps depends on what ran before.** Under Vulkan the low level lasts about 28 ms of unbroken work,
   then the clock jumps to about 3.2 GHz within a few ms; but when the latest earlier load on the card was a HIP job, it
   jumped at 12-14 ms instead: 76 of 76 runs, both Vulkan queues, one wave and 64 waves, with pauses of 1, 5 and 20 s

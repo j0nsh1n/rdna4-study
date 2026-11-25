@@ -1,0 +1,38 @@
+#version 450
+// Round 9 C control: the same kernel writes the region and then chases it (one group of 256 threads: 8 waves write
+// 4 MiB, a group barrier, wave 0 chases). The data was just written by this kernel, so it must read from L0 or L2.
+// Output as in r9_chase.comp: (cycles, sum of the stamps seen, REALTIME ticks, final slot).
+#include "gcommon.glsl"
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Region { uint reg[]; };
+layout(set = 0, binding = 1) buffer Out { uvec4 outv[]; };
+layout(push_constant) uniform PC {
+    uint a, c, mask, salt, start, steps, slot, zero;
+} pc;
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint lane = tid & 31u;
+    for (uint slot = tid >> 5u; slot <= pc.mask; slot += 8u) {
+        uint nxt = (pc.a * slot + pc.c) & pc.mask;
+        reg[slot * 32u + lane] = lane == 0u ? (nxt | (((pc.salt >> 15u) | 1u) << 15u)) : (slot ^ pc.salt) + lane;
+    }
+    memoryBarrierBuffer();
+    barrier();
+    if (tid < 32u) {
+        uint p = pc.start;
+        uint acc = 0u;
+        uint64_t c0 = clockARB();
+        uint64_t r0 = clockRealtimeEXT();
+        for (uint i = 0u; i < pc.steps; i++) {
+            uint v = reg[p * 32u + (tid & pc.zero)];
+            p = v & pc.mask;
+            acc += v >> 15u;
+        }
+        uint64_t c1 = clockARB();
+        uint64_t r1 = clockRealtimeEXT();
+        if (tid == 0u) {
+            uint64_t dc = c1 - c0;
+            outv[pc.slot] = uvec4(uint(dc), acc, uint(r1 - r0), p);
+        }
+    }
+}

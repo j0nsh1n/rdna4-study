@@ -53,7 +53,7 @@ driver's reading, scaled down on the main rail, not true board power; the deskto
 - **Barriers** cost 27 cycles per wave in CU mode and 94 in the default WGP mode for small groups, rising to 105
   and 120 at 32 waves. A wave waiting at a barrier costs the other waves on its SIMD nothing.
 - **Clock, power, temperature.** At rest: about 110 MHz, 47 W reported, hotspot 48 C, fan stopped, memory clock
-  stays at 1258 MHz. FP16 matrix for 20 s: 216 TFLOPS at 3.32 GHz, 306 W, hotspot steady at 90 to 92 C once the fan
+  stays at 1258 MHz (round 7, `round7.md`: no longer; it follows the load and idles at 456 or 772 MHz). FP16 matrix for 20 s: 216 TFLOPS at 3.32 GHz, 306 W, hotspot steady at 90 to 92 C once the fan
   reaches about 3,650 rpm. FP8 matrix: 416 TFLOPS at 3.18 GHz, against the 317 W limit (the driver's
   throttle bit PPT0 is set in 393 of 400 samples: every one after the first 0.34 s). Dual-issue FMA reached 95 C after 2.7 s and was stopped. After any load
   the hotspot falls below 55 C within 0.4 s. FP8 costs 0.76 pJ per flop in reported power, FP16 1.42, streaming
@@ -63,7 +63,8 @@ driver's reading, scaled down on the main rail, not true board power; the deskto
   TFLOPS) because the clock does not sag; the power the driver reports (a scaled reading) is 6 to 15 % lower. The
   memory overclock does not raise
   the memory clock (it stays at 1258 MHz) or the read rate. This is one overclock round against five clean stock
-  rounds. Loads lasting seconds were not measured on that profile (item 5a).
+  rounds. Loads lasting seconds were not measured on that profile (item 5a). Round 7 (`round7.md`): the memory clock now
+  reaches 1408 MHz under load.
 - **How much the desktop disturbs a measurement, and how to tell.** A spinning wave loses about 1.1 us roughly
   every 2.8 ms (0.05 % of its time). These stalls hit every SIMD at once: 99 % of the stall clusters coincide within 1 us between
   two processes, and 96 % across 16 waves on all 4 shader engines. Desktop drawing seems to add more, on weak
@@ -378,8 +379,12 @@ COOL fma +0.5 s: hotspot=53 edge=51 sclk=111 power_W_reported=48 fan=3431
   agrees with lane 4 within 1 % (verdicts `rate`).
 - The counter's clock equals `pp_dpm_sclk` within 0.03 % in every trace once both see the same window (verdicts
   `counter_vs_sclk`; ratios 0.9999 to 1.0003).
+  Round 7 (`round7.md`): on the "Default" profile the counter's clock is 140-155 MHz (4.8 %) above `pp_dpm_sclk`, which matches
+  the +150 MHz core offset; INFERRED that the reported clock omits the overclock offset, untested.
 - Memory clock stays at 1258 MHz at rest and under every load (READ in every sample): this card does not lower its
   memory clock at idle on this desktop (INFERRED: the attached displays keep it up).
+  Round 7 (`round7.md`): the lock is gone since one monitor was moved to the iGPU (owner's statement; the link is INFERRED): idle reads 456 or 772 MHz and a load takes it to
+  1408 MHz within about 16 ms; the cause of the lock is not tested further.
 - Cool-down: after every load the hotspot is below 60 C within 0.15 s and below 55 C within 0.4 s, and back at about
   48 C within 5 s. The fan stops (0 rpm) within 1 s of the load ending. The edge sensor never exceeded 55 C: the
   hotspot is a local reading.
@@ -403,6 +408,7 @@ does not raise the memory clock (the driver keeps it at 1258 MHz) or the read ra
 (a scaled reading, not true board power) is 6 to 15 % lower on the overclock profile for the same work. The
 overclock side is a single round, compared with five clean stock rounds. What the profile does to a load that
 lasts seconds was not measured (owner decision: short bursts only on that profile).
+Round 7 (`round7.md`) measured loads of 0.05 s to 20 s on "Default": the memory clock now reaches 1408 MHz (the 1409 request applies).
 
 Profiles (READ from sysfs at the start of each round, `profile-<round>.txt`):
 

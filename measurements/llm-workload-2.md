@@ -469,7 +469,7 @@ All with `LLM_RUN=runs/<folder>` to continue in one folder. Do not edit `scripts
 
 > - **The 37 TFLOPS FP16 GEMM of the first hour was the shape, and the exact-weights check agrees with round 1.** The same hipBLAS call runs at 108 to 136 TFLOPS at llama.cpp's shapes; at K = 512 with a large output the library picks a 16 x 16 tile (36.5).
 >   Against an exact F32 copy of the 3B's weights, FP8 prompts differ by a mean KL divergence of 3e-6 and Q8_0 by 7e-4. Writes to a reused buffer of up to about 50 MiB stay in the cache (1524 against 611 GB/s), which is, INFERRED, why the GEMM right after a widen runs 6 % faster.
->   ([llm-workload-2.md](measurements/llm-workload-2.md))
+>   ([llm-workload-2.md](llm-workload-2.md))
 
 **README.md, measurement-file table rows:**
 

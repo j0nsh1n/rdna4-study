@@ -45,6 +45,7 @@ given in brackets.
    kernels of a token (5 to 21 % of a token, with the profiler). The gaps are 1.8 to 1.9 us without the profiler
    (INFERRED from unprofiled token time; first run 1.8 to 2.1) and 2.9 to 3.0 us with it. HIP graphs do not hide kernels
    from the profiler.
+   > **Update, round 6 (2026-11-20, `round6.md` item C):** the bytes above are paper estimates (file tensors minus `token_embd.weight`). With the counters working, the matrix kernels' measured fetch is 1.000 to 1.001 times those weight bytes per token in all five decode workloads tested (llama.cpp Q8_0, FP8 and FP8 with a bf16 head; vLLM FP8 and bf16), so the estimate holds; the counters read the bytes once per token and do not show where the remaining time goes.
 5. **The card runs against its power limit in prompts and also in FP8 generation.** Sustained prompt loops sat at the
    317 W cap (power-limit flag PPT0 in 89 to 91 % of samples; first run 77 to 92 %) with the core at 2.94 to 3.08 GHz
    (median while awake), hotspot up to 90 C. The reported power peaks of 382 to 399 W in those loops are instantaneous
@@ -286,6 +287,7 @@ scrub before any publishing.
   > **Updated in round 2 (item 7b):** done in a separate copy of the unmodified tree with only test code added (`scripts/llm2-test-shapes.patch`): every 3B and 8B weight shape at n = 1 to 2048. A3 holds at n = 512 for the biggest matrices (718 to 842 GB/s); at larger n the GEMM after a widen is 6 % faster than on a stored F16 matrix.
 - **Counters:** only `GRBM_COUNT` was run; none of the counters was used in the analysis.
   > **Updated in round 2 (item 4):** 13 counter sets run against a kernel that reads 256 MiB: only GRBM, `SQ_WAVES`, `SQ_BUSY_CYCLES` and `SIMD_UTILIZATION` count; every memory-side and instruction counter reads 0 (no error). ~~D2 "counters work"~~ is only true for those few.
+  > **Updated in round 5 (2026-11-20, `round5.md` item I):** that holds in the `auto` performance level only, on ROCm 10.1 and 10.2 alike; in `profile_standard` 15 (10.1) and 14 (10.2) counters count.
 - **The rerun's `no-overlap` FAIL** on `trace-tg128-8b-fp8-patched` (see Rerun) is reported, not tuned away.
 - **Stale line in the first run's `summary.md`:** its first `profile` section holds "break10 ... did NOT fail" from the abandoned
   regex version of the break; its `reanalyse` section has the replacement (FAIL seen). The rerun has no such line.
@@ -327,7 +329,7 @@ scrub before any publishing.
 >   multiply. Q8_0 forced through the same route is as slow as FP8, and a 2048-token micro-batch brings FP8 to 95 % of
 >   Q8_0. Generation reaches 73 to 83 % of the read bandwidth with the FP8 decode kernel (bytes decode streams); the card sits at its 317 W
 >   limit in prompts and in FP8 generation of the 8B, and two identical runs give byte-identical saved logits.
->   ([llm-workload.md](measurements/llm-workload.md))
+>   ([llm-workload.md](llm-workload.md))
 
 **README.md, measurement-file table rows:**
 

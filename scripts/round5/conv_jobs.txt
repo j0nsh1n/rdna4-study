@@ -1,0 +1,36 @@
+cvt_exact decode
+cvt_exact encode fp8 plain
+cvt_exact encode fp8 ovfl
+cvt_exact encode fp8 rup
+cvt_exact encode fp8 rdn
+cvt_exact encode fp8 rtz
+cvt_exact encode fp8 noden
+cvt_exact encode fp8 ovfl_rtz
+cvt_exact encode bf8 plain
+cvt_exact encode bf8 ovfl
+cvt_exact encode bf8 rup
+cvt_exact encode bf8 rdn
+cvt_exact encode bf8 rtz
+cvt_exact encode bf8 noden
+cvt_exact encode bf8 ovfl_rtz
+cvt_sr sweep fp8 plain 4
+cvt_sr sweep fp8 ovfl 4
+cvt_sr sweep fp8 rtz 4
+cvt_sr sweep fp8 noden 4
+cvt_sr sweep bf8 plain 4
+cvt_sr sweep bf8 ovfl 4
+cvt_sr sweep bf8 rtz 4
+cvt_sr sweep bf8 noden 4
+cvt_widen
+cvt_dot run
+cvt_dot run --seed 777
+cvt_dot mode rtz
+cvt_dot mode rup
+cvt_dot mode rdn
+cvt_dot mode noden
+cvt_dot mode ovfl
+cvt_f16 f32f16
+cvt_f16 f16f32
+cvt_f16 bf16
+cvt_f16 pk
+cvt_f16 mix

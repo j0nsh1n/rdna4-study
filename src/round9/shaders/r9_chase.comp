@@ -1,0 +1,35 @@
+#version 450
+// Round 9 C: the consumer. One wave chases `steps` dependent loads through the region, timed with the shader cycle
+// counter (clockARB) and REALTIME (100 MHz).
+// The next slot is the loaded value (dword 0 of the slot, low 15 bits), so every step waits for its own load: the cold
+// chase over a region written once long before (and evicted) is as pointer-dependent as the others (the first version
+// computed the next slot by arithmetic there, which let the loads overlap). The final slot checks that the producer's
+// links were all there, and the sum of the stamps in the upper 17 bits of the loaded values checks that they were this
+// repetition's: stale data of the previous repetition (same links in the page walk) adds up to another sum.
+// Output: (cycles low dword, sum of stamps, REALTIME ticks, final slot). `chk` is unused (kept so the push block is unchanged).
+// The index carries `lane & zero`, which the compiler cannot prove uniform: the loads stay vector loads (an
+// address it can prove uniform could become a scalar load through the scalar cache, not the vector L0 path).
+#include "gcommon.glsl"
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Region { uint reg[]; };
+layout(set = 0, binding = 1) buffer Out { uvec4 outv[]; };
+layout(push_constant) uniform PC {
+    uint start, steps, a, c, mask, chk, slot, zero;
+} pc;
+void main() {
+    uint p = pc.start;
+    uint acc = 0u;
+    uint64_t c0 = clockARB();
+    uint64_t r0 = clockRealtimeEXT();
+    for (uint i = 0u; i < pc.steps; i++) {
+        uint v = reg[p * 32u + (gl_LocalInvocationID.x & pc.zero)];
+        p = v & pc.mask;
+        acc += v >> 15u;
+    }
+    uint64_t c1 = clockARB();
+    uint64_t r1 = clockRealtimeEXT();
+    if (gl_LocalInvocationID.x == 0u) {
+        uint64_t dc = c1 - c0;
+        outv[pc.slot] = uvec4(uint(dc), acc, uint(r1 - r0), p);
+    }
+}

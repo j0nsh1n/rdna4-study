@@ -1,0 +1,16 @@
+arith_check random
+arith_check adv
+arith_check special
+arith_check determ
+arith_check chain
+arith_check mode
+arith_more acc16
+arith_more ovfl
+arith_more mods
+arith_more sparsemap
+arith_more sparse
+arith_more int
+arith_more chain8
+arith_more hazard
+arith_more wide
+arith_more edge

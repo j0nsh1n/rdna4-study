@@ -1,0 +1,40 @@
+#version 450
+// Round 9 D: one dispatch of a fixed length. Every wave works until REALTIME (100 MHz) has passed its own start +
+// `lim` ticks, in chunks of a dependent FMA chain. Wave 0 of group 0 records (REALTIME, cycles) at the start, at
+// every chunk end (up to `maxrec`) and at the end; every wave of every group records its own start and end pair of
+// (REALTIME, cycles) in `grp`. The in-kernel core clock is cycles over REALTIME ticks x 100 MHz.
+#include "gcommon.glsl"
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Res { float res[]; };
+layout(set = 0, binding = 1) buffer Rec { uvec4 rec[]; };   // per dispatch: [0] header (count), [1..] records
+layout(set = 0, binding = 2) buffer Grp { uvec4 grp[]; };   // per wave: start (rt, cyc) then end (rt, cyc)
+layout(push_constant) uniform PC {
+    uint limlo, limhi, maxrec, recbase, grpbase, waves_per_group, chunk, pad;
+} pc;
+void main() {
+    float a = 1.0 + float(gl_LocalInvocationID.x), b = 0.999, c = 0.001;
+    uint64_t lim = uint64_t(pc.limlo) | (uint64_t(pc.limhi) << 32);
+    uint64_t r0 = clockRealtimeEXT();
+    uint64_t c0 = clockARB();
+    uint64_t r1 = r0;
+    uint k = 0u;
+    bool first = gl_WorkGroupID.x == 0u && gl_SubgroupID == 0u && subgroupElect();
+    if (first) rec[pc.recbase + 1u] = uvec4(uint(r0), uint(r0 >> 32), uint(c0), uint(c0 >> 32));
+    while (r1 - r0 < lim) {
+        for (uint i = 0u; i < pc.chunk; i++) a = fma(a, b, c);
+        r1 = clockRealtimeEXT();
+        k++;
+        if (first && k < pc.maxrec) {
+            uint64_t cc = clockARB();
+            rec[pc.recbase + 1u + k] = uvec4(uint(r1), uint(r1 >> 32), uint(cc), uint(cc >> 32));
+        }
+    }
+    uint64_t c1 = clockARB();
+    if (first) rec[pc.recbase] = uvec4(min(k + 1u, pc.maxrec), 0u, 0u, 0u);
+    if (subgroupElect()) {
+        uint w = pc.grpbase + gl_WorkGroupID.x * pc.waves_per_group + gl_SubgroupID;
+        grp[2u * w] = uvec4(uint(r0), uint(r0 >> 32), uint(c0), uint(c0 >> 32));
+        grp[2u * w + 1u] = uvec4(uint(r1), uint(r1 >> 32), uint(c1), uint(c1 >> 32));
+    }
+    if (a == 12345.0) res[gl_GlobalInvocationID.x] = a;
+}

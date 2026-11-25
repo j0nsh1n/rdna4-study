@@ -21,6 +21,9 @@ regulator mod is the owner's statement, not something measured here. The core cl
 copy 550 GB/s, latency 137 ns) were taken on the earlier overclocked profile. Cycles are shader-clock cycles from the
 wave's own counter; nanoseconds come from the 100 MHz REALTIME counter.
 
+Round 7 (`round7.md`): the memory clock is no longer held at 1258 MHz. Under any streaming load it now reads 1408 MHz (this run made no display change), and a read pass runs at 700.3 GB/s (write 638.7, copy 608.9), about 10 to 11 % above the 1258 MHz
+figures in this file. MEASURED.
+
 ## In short
 
 The memory system as one wave or one kernel sees it:
@@ -1055,6 +1058,7 @@ Answered since (leftovers C, 2026-11-17):
 - Answered in scheduling-and-clocks.md, item 5a: the 1409 MHz memory request is accepted into the overdrive table but
   not applied (the driver keeps the memory clock at 1258 MHz). Why, and whether setting it by hand works, stays open
   there (the owner will test it; leftovers C plan, MS-1 and SC-14).
+  Round 7 (`round7.md`): the request now applies; loads of 0.05 s to 20 s read 1408 MHz (no 1258 MHz reading in 27 traced loads).
 - Answered (leftovers C, MS-6, `measurements/leftovers-c-a.md`): hints through the buffer-load builtins' cache-policy
   operand: the operand maps one to one onto the instruction's hint and scope fields (32 of 32 policy values checked in
   the listing), and each hint has the same effect as through inline assembly within 2 %: after an RT or HT read the

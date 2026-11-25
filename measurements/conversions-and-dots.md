@@ -70,6 +70,7 @@ section 2a). Two routes, one rule.
   MODE rounding and denormal bits change nothing; FP16_OVFL clamps the FP16 form.
 - **What they are good for:** `v_dot4_f32_fp8_fp8` issues one per cycle (4 multiply-adds per lane per cycle, latency
   6), four times an FMA and twice `v_dot2_f32_f16`; the FP8 matrix instruction does about 16 per lane per cycle.
+  Round 7 (`round7.md`): in wave64 dot4 does 8 per lane per cycle, so the matrix lead is 2x, not 4x.
   Use dot4 for FP8 x FP8 work too small for the matrix unit (one-column decode with FP8 activations); widen to FP16
   for anything that needs FP16 or FP32 activations.
 - **FP16 is ordinary IEEE** (item 6, helper-written probe, rerun here): FP32 to FP16 rounds to nearest even and,
@@ -297,6 +298,10 @@ Cost (MEASURED, cycles per instruction, `cvt_time`):
 | FP16 matrix instruction (READ, first hour: 16.1 cycles) | | | about 8 |
 
 INFERRED: six independent accumulators keep dot4 at full rate. The dot4 FP8 forms have no dual-issue encoding.
+
+Round 7 (`round7.md`): this table is wave32. In wave64 the same eight dot forms also cost 1.00 (independent) and 6.00 (chained),
+so a wave64 instruction does twice the work (dot4: 256 against 128 multiply-adds per cycle per SIMD; whole card 99.1 against
+50.1 T MAC/s); the FP8/BF8 conversions cost 2.00 in wave64 (no gain per cycle). MEASURED.
 
 ### 5a. NaN words and modifier bits (leftovers pass, MEASURED, `runs/20261117T165551Z-leftmat/`)
 

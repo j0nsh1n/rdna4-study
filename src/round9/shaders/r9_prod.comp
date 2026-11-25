@@ -1,0 +1,17 @@
+#version 450
+// Round 9 C: the producer. Writes a 4 MiB region of 32,768 slots of 128 bytes (one cache line each): dword 0 of slot s
+// holds next(s) = (a * s + c) & mask (a full cycle over the slots when a % 4 == 1 and c is odd) in its low 15 bits and the
+// stamp of the repetition, (salt >> 15) | 1, in its upper 17 bits; the other 31 dwords hold filler, so every line is written
+// in full. The stamp changes every repetition while the walk need not (the page walk is the same every repetition), so a
+// consumer that sees stale data adds up the wrong stamps. One group of 256 threads writes 8 slots.
+layout(local_size_x_id = 0) in;
+layout(set = 0, binding = 0) buffer Region { uint reg[]; };
+layout(push_constant) uniform PC {
+    uint a, c, mask, salt;
+} pc;
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    uint slot = tid >> 5u, lane = tid & 31u;
+    uint nxt = (pc.a * slot + pc.c) & pc.mask;
+    reg[slot * 32u + lane] = lane == 0u ? (nxt | (((pc.salt >> 15u) | 1u) << 15u)) : (slot ^ pc.salt) + lane;
+}

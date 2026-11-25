@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Writes src/round9/ld_mat_k_blocks.h: the instruction streams of ld_mat_k.hip (round 9, item A, load-ratio variant).
+
+Usage: python3 -I gen_ld_mat_k.py <output header>        (standard library only)
+
+Question: in gen_ld_mat.py's stream every matrix instruction has one landing load (and the 26-cycle charge of
+matrix-timing.md 8a appears once per instruction). Is the charge paid per landing load, or per matrix instruction that has a
+wait in front of it? Here one load group is issued per G matrix instructions (G = 1, 4, 8) instead of per instruction.
+
+Streams (name k<G><v>_d<D>, or ref), one wave of 209 registers (the one-wave cells of ld_mat; same padding and launch):
+  - a loop body of NMM = 112 matrix instructions v_wmma_f32_16x16x16_fp8_fp8 (112 = 14 x 8 = 28 x 4 = 112 x 1, so every G
+    divides it and the pattern has no ragged edge at the loop end), chained through the accumulator (8.0 cycles each).
+  - groups: group j (j = 0 .. 112/G - 1) is the matrix instructions G j .. G j + G - 1. At the first instruction of group j:
+      global_load_b64 for group j + D (D groups of lookahead; one 64-bit load per lane = 256 bytes per wave per group),
+      s_wait_loadcnt D (group j's load has arrived, D newer ones may fly).
+    v = s: the wait appears only in front of the first instruction of a group (one wait per landing load).
+    v = w: the same wait, with the same count, also in front of every other instruction of the group (a wait in front of
+           every matrix instruction; it never blocks, since group j has already landed). Same loads, same landings; only
+           the number of waits differs. This is what separates "per landing load" from "per instruction with a wait".
+    All G instructions of a group read the same A register pair (the group's load).
+  - The ring: Kr register pairs, Kr the smallest divisor of 112/G that is at least D + 2, so the slot of group g is g mod Kr
+    on every iteration (no clash at the loop edge, unlike a ring whose size does not divide the body). Registers v16..v23
+    accumulator, v24:25 B, v26 .. ring, v208 clobbered so the kernel is padded to 209.
+  - D = 0: load, wait at once, then the G instructions (the latency is not covered: a cell where the cost of a load is seen).
+  - ref: the same instructions and address arithmetic with no loads and no waits.
+  - The loads of the first D groups are issued before the loop; the loads of the next iteration's first D groups at the end
+    of this one. Loads read at voff + 256 g; voff moves 256 x (112/G) bytes (this iteration's loads) per iteration and
+    wraps inside the span (a power of two).
+"""
+import sys
+
+NMM = 112
+STEP = 256
+R = 209
+TPB = 448
+RING0 = 26
+CELLS = [  # G, variant, D
+    (1, "s", 24), (1, "s", 54),
+    (4, "s", 0), (4, "s", 12), (4, "s", 24), (4, "w", 12), (4, "w", 24),
+    (8, "s", 0), (8, "s", 6), (8, "s", 12), (8, "w", 6), (8, "w", 12),
+]
+
+
+def ring(g_count, d):
+    for k in range(d + 2, g_count + 1):
+        if g_count % k == 0:
+            return k
+    raise ValueError("no ring size")
+
+
+def stream(G, v, D, ref):
+    gn = NMM // G
+    kr = 2 if ref else ring(gn, D)
+    assert RING0 + 2 * kr <= R, "ring does not fit the registers"
+    L = []
+    for r in range(16, 24):
+        L.append(f"v_mov_b32 v{r}, 0")
+    L.append("v_mov_b32 v24, 0x24242424")
+    L.append("v_mov_b32 v25, 0x24242424")
+    for k in range(kr):
+        L.append(f"v_mov_b32 v{RING0 + 2 * k}, 0x24242424")
+        L.append(f"v_mov_b32 v{RING0 + 2 * k + 1}, 0x24242424")
+    L.append("s_getreg_b32 %[t0], hwreg(HW_REG_SHADER_CYCLES_LO)")
+    L.append("s_mov_b32 %[cnt], %[n]")
+
+    def load(g):
+        reg = RING0 + 2 * (g % kr)
+        return f"global_load_b64 v[{reg}:{reg + 1}], %[voff], %[base] offset:{g * STEP}"
+
+    if not ref:
+        for g in range(D):
+            L.append(load(g))
+    L.append("2:")
+    for p in range(NMM):
+        j, r = divmod(p, G)
+        if not ref:
+            if r == 0:
+                L.append(load(j + D))
+            if r == 0 or v == "w":
+                L.append(f"s_wait_loadcnt {D}")
+        a = RING0 + 2 * (j % kr)
+        L.append(f"v_wmma_f32_16x16x16_fp8_fp8 v[16:23], v[{a}:{a + 1}], v[24:25], v[16:23]")
+    L.append(f"v_add_nc_u32 %[voff], {gn * STEP}, %[voff]")
+    L.append("v_and_b32 %[voff], %[mask], %[voff]")
+    L.append("s_add_co_i32 %[cnt], %[cnt], -1")
+    L.append("s_cmp_lg_u32 %[cnt], 0")
+    L.append("s_cbranch_scc1 2b")
+    if not ref:
+        L.append("s_wait_loadcnt 0")
+    L.append("s_getreg_b32 %[t1], hwreg(HW_REG_SHADER_CYCLES_LO)")
+    return kr, L
+
+
+def main():
+    out = sys.argv[1]
+    blocks = []
+    for G, v, D in CELLS:
+        kr, lines = stream(G, v, D, False)
+        blocks.append((f"k{G}{v}_d{D}", D, kr, lines))
+    kr, lines = stream(1, "s", 0, True)
+    blocks.append(("ref", -1, kr, lines))
+    with open(out, "w") as f:
+        f.write("// Generated by scripts/round9/gen_ld_mat_k.py: do not edit. Instruction streams of ld_mat_k.hip (round 9, item A, load ratio).\n")
+        f.write("// X(name, D, K, R, TPB, text): D lookahead in load groups (-1: matrix only), K ring pairs, R registers, TPB threads per group.\n")
+        for name, d, kr, lines in blocks:
+            clob = ", ".join(f'"v{i}"' for i in range(16, R)) + ', "scc", "memory"'
+            f.write(f"#define LDM_CLOB_{name} {clob}\n")
+        f.write("#define LD_MAT_BLOCKS(X) \\\n")
+        for name, d, kr, lines in blocks:
+            text = " ".join(f'"{ln}\\n"' for ln in lines)
+            f.write(f"    X({name}, {d}, {kr}, {R}, {TPB}, {text}) \\\n")
+        f.write("\n")
+        f.write(f"constexpr int LDM_NMM = {NMM};\n")
+
+
+if __name__ == "__main__":
+    main()

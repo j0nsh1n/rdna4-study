@@ -32,4 +32,24 @@ n=$(grep -rn "/home/\|$(id -un)" "$repo/scripts/round9" "$repo/src/round9" --inc
 check "no committed round 9 script or source names /home/ or a user name" "$n" 0
 d=$(bash -c 'unset STUDY_GPU_LOCK R9_HOLD; export R9_REPO='"$repo"' CARD_ENV=/nonexistent; . '"$here"'/common.sh; echo "$STUDY_GPU_LOCK $HOLD"')
 [[ $d == "$repo/runs/gpu.lock $repo/runs/HOLD-FSR" ]] && echo "PASS lock and hold defaults follow the checkout" || { echo "FAIL defaults: $d"; rc=1; }
+# (3) gate() refuses while RESTORE-FAILED exists (round 10 P0), and starts the job once it is gone (the control). The repository is a
+# fake with a stub scripts/study-llm.sh, so no real job can start.
+fk=$t/fakerepo
+mkdir -p "$fk/scripts" "$t/gaterun"
+printf '#!/bin/sh\necho ran >>"%s/job-ran"\n' "$t" >"$fk/scripts/study-llm.sh"
+chmod +x "$fk/scripts/study-llm.sh"
+run_gate() { # run_gate <RESTORE-FAILED path> -> the gate's exit status
+    (
+        export R9_REPO=$fk CARD_ENV=/nonexistent R9_RESTORE_FAILED=$1 R9_HOLD=$t/nohold R9_PAUSE=0
+        . "$here/common.sh"
+        RUN=$t/gaterun
+        gate probe 60 5 true >"$t/gate.out" 2>&1
+    )
+    echo $?
+}
+: >"$t/RESTORE-FAILED"
+g=$(run_gate "$t/RESTORE-FAILED")
+[[ $g != 0 && ! -e $t/job-ran ]] && grep -q "REFUSED probe" "$t/gate.out" && echo "PASS gate() refuses while RESTORE-FAILED exists (exit $g, job not started)" || { echo "FAIL gate with RESTORE-FAILED: exit $g"; rc=1; }
+g=$(run_gate "$t/absent")
+[[ $g == 0 && -e $t/job-ran ]] && echo "PASS control: without the file the same gate() call runs its job" || { echo "FAIL gate control: exit $g"; rc=1; }
 exit $rc

@@ -42,6 +42,16 @@ summary says "with uncommitted changes": those were two helpers' files of other 
   (16-bit inputs) or quads (8-bit inputs; inside a quad each product is first floored at 2^-24 of the quad's own
   largest product), then each pair or quad sum is floored once. After every step the sum is rounded to FP32 (round
   to nearest even). A running sum smaller than one unit of the next step vanishes.
+- **Other public work reports the same structure (READ 2026-11-25; not compared bit for bit here).** AMD's emulator
+  rocjitsu merged a bit-exact CPU model of the gfx12 matrix arithmetic on 2026-10-22
+  ([ROCm/rocm-systems PR 13673](https://github.com/ROCm/rocm-systems/pull/13673); RDNA 4 data "captured on an RX 9070 XT
+  and an R9700", [issue 15150](https://github.com/ROCm/rocm-systems/issues/15150)): FP8 products in groups of four, each
+  aligned on its own largest exponent, low bits floored, FP32 round to nearest even. A separate report of 2026-10-31
+  ([pearl-research-labs/pips issue 17](https://github.com/pearl-research-labs/pips/issues/17)) gives the FP8 form as two
+  chained groups of 8 products with quad pre-sums, floor and round to nearest even, matched on an RX 9070 XT and an
+  RX 9060 XT. Both are earlier than this study's runs (2026-11-17); the study did not cite them until now. A later CPU
+  comparison found this model and rocjitsu agree bit for bit on every dense form and every sparse form with valid indices
+  ([ext-review-checks.md](ext-review-checks.md), check 2); the pips description was compared in words only.
 - **16-bit accumulators use the same adder, rounded to 16 bits after every step (MEASURED).** FP16 into FP16 rounds
   each step to FP16 to nearest even; BF16 into BF16 rounds each step to FP32 and then simply drops the low 16 bits
   (toward zero). So a BF16 accumulator loses up to a whole BF16 step per instruction step, always toward zero; a

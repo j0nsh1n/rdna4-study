@@ -11,6 +11,9 @@ export STUDY_GPU_LOCK=${STUDY_GPU_LOCK:-$REPO/runs/gpu.lock}
 export LLM_EXPECT_PROFILE=${LLM_EXPECT_PROFILE:-Default}
 export R9_BIN=$BIN VKG_SPV=$REPO/build/round9/spv
 HOLD=${R9_HOLD:-$REPO/runs/HOLD-FSR}
+# RESTORE-FAILED is written by scripts/round10/pin_mclk.sh when it could not put the card's power level and memory-clock mask back;
+# gate() refuses to start any job while it exists (remove it by hand after checking both sysfs files).
+RESTORE_FAILED=${R9_RESTORE_FAILED:-$REPO/runs/RESTORE-FAILED}
 CARD_ENV=${CARD_ENV:-$REPO/runs/latest/card.env}
 if [[ -r $CARD_ENV ]]; then
     # shellcheck disable=SC1090
@@ -30,11 +33,21 @@ start_run() {
     echo "run folder $RUN"
 }
 
+# gate_refuse_if_restore_failed <name>: non-zero (and counts as a failed gate) while the RESTORE-FAILED file exists.
+gate_refuse_if_restore_failed() {
+    [[ -e $RESTORE_FAILED ]] || return 0
+    echo "$(date -u +%T) REFUSED $1: $RESTORE_FAILED exists (a memory-clock restore failed; check the card's power_dpm_force_performance_level and pp_dpm_mclk by hand, then remove the file)"
+    GATE_FAILS=$((GATE_FAILS + 1))
+    return 1
+}
+
 # gate <name> <hot limit C> <timeout s> <command...>: one gated GPU job. Waits while the hold file exists.
 gate() {
     local name=$1 hot=$2 tmo=$3
     shift 3
+    gate_refuse_if_restore_failed "$name" || return 9
     while [[ -e $HOLD ]]; do sleep 5; done
+    gate_refuse_if_restore_failed "$name" || return 9  # it can appear during the hold wait
     echo "$(date -u +%T) start $name"
     "$REPO/scripts/study-llm.sh" r4dev "r9-$name" "$hot" "$tmo" "$@" >"$RUN/$name.stdout" 2>&1
     local rc=$?

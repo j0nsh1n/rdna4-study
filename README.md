@@ -20,7 +20,14 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   dense and all 11 sparse forms match the models. The card adds 16-bit-input products in 4 steps of 4, and 8-bit-input
   products in 2 steps of 8. Each fixed-point step cuts low bits toward minus infinity, then rounds the sum to FP32.
   A small term next to a large one can vanish.
+  AMD's rocjitsu emulator (2026-10-22) and a separate public report (2026-10-31) describe the same FP8 structure; a later
+  CPU comparison found rocjitsu and this model agree bit for bit ([ext-review-checks.md](measurements/ext-review-checks.md)).
   ([matrix-arithmetic.md](measurements/matrix-arithmetic.md))
+- **The study's matrix-arithmetic model agrees bit for bit with AMD's rocjitsu emulator.** The CPU-only comparison
+  covered all 11 dense forms, with about 1 million outputs each, and all 9 sparse forms with valid indices. Both models
+  also match all 278,635 recorded card outputs. They differ only for invalid sparse indices, which AMD's header calls
+  unspecified. AMD's rocjitsu code is in ROCm/rocm-systems under the MIT licence.
+  ([ext-review-checks.md](measurements/ext-review-checks.md))
 - **The matrix adder's error rarely survives rounding to FP8.** Only 2 of 1,446,000 model-shaped outputs differed from
   the exact sum after E4M3 rounding. With FP8 weights, FP16 output differed in 0.004 % of cases at K = 16 and 0.18 % at
   K = 4096.
@@ -46,6 +53,9 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   second in the runs read here, so "about every 2.8 ms" fits only the quieter ones. A spinning wave loses about 1.1 us per pause, and 96 % of stall clusters coincide
   across waves on all 4 shader engines. The cycle counter keeps running during the pause, so timing code needs short
   regions or medians.
+  In the two saved two-wave runs, 98.8 % and 97.9 % of stall events fell within the window of the other wave's events,
+  against about 0.15 % after random shifts (95 % ranges up to 0.6 % and 1.9 %), so the coincidence is far above chance;
+  the 16-wave run saved no event times, so its published 96 % figure could not be rechecked.
   ([scheduling-and-clocks.md](measurements/scheduling-and-clocks.md))
 - **Vulkan reaches the same hardware limits as HIP.** Register-fed matrix work measured 210.6 TFLOPS for FP16 and 421.0
   for FP8 through Vulkan, against 211 and 420 through HIP. Vulkan read 636 GB/s against HIP's 633. RADV uses wave64 for
@@ -57,6 +67,13 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   256 in the probe.
   ([compiler-and-hazards.md](measurements/compiler-and-hazards.md),
   [leftovers-c-b.md](measurements/leftovers-c-b.md))
+- **The compiler still omits a required matrix-instruction hazard fix across a non-inlined call.** In listing-only
+  checks, no V_NOP sits between a non-inlined callee's final WMMA and the caller's next WMMA that reads that result.
+  The gap remains in ROCm 10.2's AMD clang, for gfx1201 and gfx1200, at -O3 and -O1. In upstream clang 22.1.8 the
+  callee still returns straight after its WMMA, though in this probe an unrelated instruction happened to fall between
+  the two. A gfx11 port also shows the gap for gfx1150 and gfx1151, and the same gap was measured on RDNA 3 in the
+  companion study. These listings were not run on the card.
+  ([ext-review-checks.md](measurements/ext-review-checks.md))
 - **Game-style work starts at a lower clock through Vulkan than through HIP and steps up only when idle gaps are short.**
   The same loop starts at 1.7 to 1.8 GHz through Vulkan and 2.7 to 2.8 through HIP. An upscaler's neural network took
   about 2.8 ms per frame at the low clock and 1.6 ms at full clock. On the game route's graphics queue, gaps of 2.1 ms
@@ -120,6 +137,8 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   about 2 %, and hipBLASLt picks the same tiles under renamed kernels. vLLM FP8 decode ran at about 159 or about 120 tokens/s at
   one stream depending on the engine start, in both versions, with the same clocks; the cause is unknown. The vLLM version changed
   with ROCm (0.29.1 against 0.32.1.dev0), so ROCm alone is not isolated (2026-11-20).
+  A public ROCm/TheRock issue (2026-06-11) reports the same kind of split, fixed at process start, for vLLM on an R9700;
+  its cause is open there too.
   ([round6.md](measurements/round6.md), [llm-runtimes.md](measurements/llm-runtimes.md))
 - **Decode reads the model's weights exactly once per token, in every format tested.** With the profiler counters working, the
   matrix kernels of llama.cpp (Q8_0, FP8, FP8 with a bf16 head) and vLLM (FP8, bf16) fetch 1.000 to 1.001 times the weight bytes
@@ -171,6 +190,14 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   per load. What one dispatch leaves in L2 for the next, and whether cache latency depends on the memory clock, were not
   answered: the controls failed or the clock could not be separated from the load that raises it.
   ([round9.md](measurements/round9.md))
+
+Update (2026-11-25): three no-card checks cover the compiler gap at a call boundary, bit-for-bit agreement with AMD's
+rocjitsu arithmetic model, and a chance control for the pause coincidence
+([ext-review-checks.md](measurements/ext-review-checks.md)). A new dry-run-only driver for later memory-clock pinning
+keeps every settings change under the shared lock, restores the setting even if the job is killed, and blocks further
+jobs if the restore fails. It refuses real runs without an explicit switch and the right card. Its 22 self-test cases
+used stand-in files; it has not run on the card.
+([round10-p0.md](measurements/round10-p0.md))
 
 ## Card and setup
 
@@ -230,7 +257,10 @@ is the main instruction reference.
 | `notes/` | The study plan, first-hour record, session guide, and reading notes on the hardware and software stack. |
 | `notes/plans/` | The matrix-arithmetic test plan. |
 | `scripts/` | One `study-*.sh` entry point per study lane, Python checkers and table builders, and expected machine-code patterns. `scripts/round5/`, `scripts/round6/` and `scripts/round9/` hold the rounds' own wrappers and analysis scripts. |
+| `scripts/extcheck/` | Build, scan, extraction, and pause-chance scripts for the three no-card checks. |
+| `scripts/round10/` | The dry-run-only memory-clock pinning driver and its self-test. |
 | `src/` | HIP probes, Vulkan host programs, and Vulkan shaders. `src/round5/`, `src/round6/` and `src/round9/` hold the rounds' own probes. |
+| `src/extcheck/` | The gfx11 compiler probe, arithmetic-model comparison harness, and rocjitsu build wrapper. |
 
 `runs/`, `build/`, `toolchains/`, and `sources/` are git-ignored. Raw run data is not in the repository. Each write-up
 names its run folder and the script and mode that produced it. The committed tables preserve the results; rerun the
@@ -254,6 +284,8 @@ script to check them against new raw data.
 | `round7.md` | Round 7: the memory clock under load (1408 MHz, unlocked), 32- against 64-wide waves, and FSR 4 cost seen from the outside with AMD's SDK sample. |
 | `round8.md` | Round 8: FSR 4.1.2 cost per size and preset, the timing-kit result, a time for each of its 28 dispatches (one instrumented run, names inferred), an observed slowdown with a lower memory clock, and a look at how the compiler built its passes (counts only, no AMD shader code); withdraws round 7's clock-scaled FSR estimate. |
 | `round9.md` | Round 9: load order, loads beside matrix work (raw tables and a one-wave load ratio), data across dispatches (observations), the core clock at a fixed cadence and under `profile_standard`, and memory bandwidth at 1408 MHz. |
+| `ext-review-checks.md` | Three no-card checks: compiler listings at a call boundary, bit-for-bit comparison with AMD's rocjitsu arithmetic model, and a chance control for pause coincidence. |
+| `round10-p0.md` | Dry run only: a memory-clock pinning driver with locked settings changes, watchdog restore, a failure gate, and 22 self-test cases using stand-in files. |
 | `leftovers-c-a.md` | Follow-up probes of the execution core, memory, LDS, and compiler hazards. |
 | `leftovers-c-b.md` | Follow-up probes of matrix rules, scheduling, special loads, Vulkan, and arithmetic error. |
 | `gaming-route.md` | An upscaler's neural network on the headless vkd3d-proton, dxil-spirv, and RADV route. |

@@ -12,7 +12,7 @@
 #   llama   compiles two of llama.cpp's matrix-multiply instance files for gfx1201 (device code only, about two
 #           minutes, several GB of memory) and runs the mask scan on them; not part of "all"
 # Environment: STUDY_REPO (default: this folder's parent) supplies src/harness.h, src/study/arith_model.h and
-# scripts/mem_loopcheck.py; LLAMA_SRC (default ~/Projects/rdna3-fp8/build/llama.cpp-latest) for "llama".
+# scripts/mem_loopcheck.py; LLAMA_SRC (a llama.cpp checkout; see the script for its default) for "llama".
 # Results: runs/<UTC time>-haz/: one log per job and per check, card.txt (profile, clocks, hotspot), summary.txt.
 # Exit status 1 if anything failed.
 # GPU jobs: the shared lock, nice, a two-minute limit, HIP device 0 (the discrete card), not started below 8 GB

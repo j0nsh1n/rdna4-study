@@ -24,8 +24,10 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   CPU comparison found rocjitsu and this model agree bit for bit ([ext-review-checks.md](measurements/ext-review-checks.md)).
   ([matrix-arithmetic.md](measurements/matrix-arithmetic.md))
 - **The study's matrix-arithmetic model agrees bit for bit with AMD's rocjitsu emulator.** The CPU-only comparison
-  covered all 11 dense forms, with about 1 million outputs each, and all 9 sparse forms with valid indices. Both models
-  also match all 278,635 recorded card outputs. They differ only for invalid sparse indices, which AMD's header calls
+  covered all 11 dense forms, with about 1 million outputs each, and 9 of the 11 sparse forms (all but the two 4-bit
+  ones) with valid indices. Both models
+  also match all 278,635 recorded card outputs. They differ only for the 8-bit integer sparse form with invalid indices, on AMD's
+  SIMD code paths, which AMD's header calls
   unspecified. AMD's rocjitsu code is in ROCm/rocm-systems under the MIT licence.
   ([ext-review-checks.md](measurements/ext-review-checks.md))
 - **The matrix adder's error rarely survives rounding to FP8.** Only 2 of 1,446,000 model-shaped outputs differed from
@@ -71,8 +73,8 @@ Each bullet states the result. The linked file contains the evidence, spread, an
   checks, no V_NOP sits between a non-inlined callee's final WMMA and the caller's next WMMA that reads that result.
   The gap remains in ROCm 10.2's AMD clang, for gfx1201 and gfx1200, at -O3 and -O1. In upstream clang 22.1.8 the
   callee still returns straight after its WMMA, though in this probe an unrelated instruction happened to fall between
-  the two. A gfx11 port also shows the gap for gfx1150 and gfx1151, and the same gap was measured on RDNA 3 in the
-  companion study. These listings were not run on the card.
+  the two. A gfx11 port also shows the gap for gfx1150 and gfx1151, and the same gap was measured on an RDNA 3 card in the
+  companion study (rdna3-fp8, `measurements/compiler-hazards-rdna3.md`). These listings were not run on the card.
   ([ext-review-checks.md](measurements/ext-review-checks.md))
 - **Game-style work starts at a lower clock through Vulkan than through HIP and steps up only when idle gaps are short.**
   The same loop starts at 1.7 to 1.8 GHz through Vulkan and 2.7 to 2.8 through HIP. An upscaler's neural network took

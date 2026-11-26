@@ -1,7 +1,7 @@
 # RDNA 4 deep-dive: starting point
 
 Local only, no remote. Card: RX 9070 XT (gfx1201), replacing the RX 7900 XT (gfx1100) in the same machine.
-Goal: the same kind of deep-dive as `~/Projects/rdna3-fp8`, for RDNA 4. Scope and order are for the session that
+Goal: the same kind of deep-dive as the companion RDNA 3 study (rdna3-fp8), for RDNA 4. Scope and order are for the session that
 runs it (the user plans to switch this thread to Fable) to settle with the user.
 
 ## Ready before the swap (checked 2026-11-16)

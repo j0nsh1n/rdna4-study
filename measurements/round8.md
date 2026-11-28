@@ -147,6 +147,8 @@ off (`exp/cp-*`, `cp-clockpair.log`). The sysfs readback matched the written lev
 in the "standard" cells too: `profile_standard` did not yield a distinct sampled core clock in this test, and the files do not show why. The level was restored to `auto` and checked.
 Result for the core clock: not tested. The upscaler times of the cells with the memory clock at 1408 agree within 0.8 % at 1080p (0.3487-0.3514 ms) and 0.3 % at 4K (1.663-1.669 ms), which is the run-to-run noise of this method.
 
+*Update (2026-11-26, INFERRED; daemon journal not retained):* During the pinned memory-clock follow-up ([kimi-followups.md](kimi-followups.md)), the first pinned `FidelityFX_FSR.exe` window (`pinned-lat-fsr-1/fsr/r1-L5`) lost its `manual` pin and ended in `RESTORE-FAILED level now 'auto', mask 'all'`, whereas pausing `falcond.service` in the rerun (`pinned-fsr-item3-1/fsr/`, `FALCOND_STOPPED=1`) let all four pinned windows hold `manual` and finish `RESTORE-OK`. The `journalctl -u falcond` excerpt from that session was not kept in the run folders, so the daemon-side message and timing cannot be re-traced here; `falcond.service` overwriting `power_dpm_force_performance_level` is an inferred explanation for why `profile_standard` did not hold in `clockpair.sh` above rather than a retained-log proof.
+
 ## The memory clock: slow cells are associated with it (MEASURED; the cause is INFERRED)
 
 | Cell | Core clock (window median) | Memory clock (window median) | Upscaler (ms) | Same cell type at 1408 MHz memory (ms) | Change |

@@ -1,0 +1,26 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "gfx_common.glsl"
+// Texture rate without the ROPs. MODE 0: textureGrad at explicit gradients (so the filter, mip and anisotropy paths are driven by the
+// push constants, not by neighbouring lanes). MODE 1: texelFetch (load without filter). Each wave reads one random row, consecutive
+// texels along it; the sum is stored only when it is negative (never), so the loads cannot be removed.
+layout(local_size_x = 64) in;
+layout(constant_id = 0) const int MODE = 0;
+layout(set = 0, binding = 0) uniform sampler2D tex;
+layout(set = 0, binding = 1) buffer Out { vec4 o[]; } outb;
+layout(push_constant) uniform PC { uint mask; uint iters; float invsize; float gx; float gy; uint seed; uint u6; uint u7; } pc;
+void main() {
+    const uint gid = gl_GlobalInvocationID.x;
+    const uint row = hash32((gid >> 6) ^ pc.seed);
+    vec4 acc = vec4(0.0);
+    for (uint i = 0u; i < pc.iters; ++i) {
+        const uint tx = (gid + i * 73u) & pc.mask, ty = (row + i * 131u) & pc.mask;
+        if (MODE == 0) {
+            const vec2 uv = (vec2(float(tx), float(ty)) + 0.5) * pc.invsize;
+            acc += textureGrad(tex, uv, vec2(pc.gx, 0.0), vec2(0.0, pc.gy));
+        } else {
+            acc += texelFetch(tex, ivec2(int(tx), int(ty)), 0);
+        }
+    }
+    if (acc.x < -1.0) outb.o[gid] = acc;
+}

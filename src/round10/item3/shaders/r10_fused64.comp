@@ -1,0 +1,41 @@
+#version 450
+// Round 10 item 3: the cache-hit control of the 64-bit form (HIP's k_fused). One group of 256 threads writes the 4 MiB chain
+// (8 waves), a group barrier, then wave 0 chases it with 64-bit addresses as r10_chase64.comp does. The data was just
+// written by this kernel, so it must read from L0 or L2. Output as r10_chase64.comp.
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#include "gcommon.glsl"
+layout(local_size_x_id = 0) in;
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer Words { uint w[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer Node { uint64_t next; };
+layout(set = 0, binding = 1) buffer Out { uvec4 outv[]; };
+layout(push_constant) uniform PC {
+    uint64_t base;
+    uint a, c, mask, salt;
+    uint64_t start;
+    uint steps, slot, zero;
+} pc;
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint lane = tid & 31u;
+    for (uint slot = tid >> 5u; slot <= pc.mask; slot += 8u) {
+        uint nxt = (pc.a * slot + pc.c) & pc.mask;
+        uint64_t adr = pc.base + uint64_t(nxt) * 128ul;
+        Words(pc.base).w[slot * 32u + lane] = lane == 0u ? uint(adr) : lane == 1u ? uint(adr >> 32) : (slot ^ pc.salt) + lane;
+    }
+    memoryBarrier();
+    barrier();
+    if (tid < 32u) {
+        uint64_t p = pc.start;
+        const uint64_t lv = uint64_t(tid & pc.zero);
+        uint64_t c0 = clockARB();
+        uint64_t r0 = clockRealtimeEXT();
+        for (uint i = 0u; i < pc.steps; i++) p = Node(p + lv).next;
+        uint64_t c1 = clockARB();
+        uint64_t r1 = clockRealtimeEXT();
+        if (tid == 0u) {
+            outv[2u * pc.slot] = uvec4(uint(c1 - c0), 0u, uint(r1 - r0), 0u);
+            outv[2u * pc.slot + 1u] = uvec4(uint(p), uint(p >> 32), 0u, 0u);
+        }
+    }
+}

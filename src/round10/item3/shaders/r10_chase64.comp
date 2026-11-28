@@ -1,0 +1,64 @@
+#version 450
+// Round 10 item 3: the Vulkan side of HIP's pointer chase. One wave follows 64-bit absolute addresses (buffer device
+// address) with nothing else in the timed loop: no mask, no stamp sum, no index arithmetic, one 8-byte load per step,
+// as mem_latency.hip's k_chase (global_load_b64 + wait). Compile-time switches (glslc -D):
+//   LANEV   the address carries `lane & zero` (a value the compiler cannot prove uniform) added to it: this keeps the load
+//           a vector load (r9_chase.comp does the same) at the price of one 64-bit add on the chain. Without it the address
+//           may be proved uniform by the compiler (the listing says what it did).
+//   COH     the pointer block is `coherent` (cache-policy parity with HIP's scope:SCOPE_DEV loads).
+//   PASS2   the chain of `steps` nodes is walked twice, each pass timed (reach test): outv[2*slot] = (cycles pass 1,
+//           cycles pass 2, REALTIME ticks of both, 0)
+// Output: outv[2*slot] = (cycles, 0, REALTIME ticks, 0) and outv[2*slot+1] = (final address low, high, 0, 0).
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#include "gcommon.glsl"
+#ifdef COH
+#define CQ coherent
+#else
+#define CQ
+#endif
+layout(local_size_x_id = 0) in;
+layout(buffer_reference, std430, buffer_reference_align = 8) CQ buffer Node { uint64_t next; };
+layout(set = 0, binding = 1) buffer Out { uvec4 outv[]; };
+layout(push_constant) uniform PC {
+    uint64_t start;
+    uint steps, slot, zero;
+} pc;
+void main() {
+    uint64_t p = pc.start;
+#ifdef LANEV
+    const uint64_t lv = uint64_t(gl_LocalInvocationID.x & pc.zero);
+#endif
+    uint64_t c0 = clockARB();
+    uint64_t r0 = clockRealtimeEXT();
+    for (uint i = 0u; i < pc.steps; i++) {
+#ifdef LANEV
+        p = Node(p + lv).next;
+#else
+        p = Node(p).next;
+#endif
+    }
+#ifdef PASS2
+    uint64_t c1 = clockARB();
+    for (uint i = 0u; i < pc.steps; i++) {
+#ifdef LANEV
+        p = Node(p + lv).next;
+#else
+        p = Node(p).next;
+#endif
+    }
+    uint64_t c2 = clockARB();
+    uint64_t r1 = clockRealtimeEXT();
+    if (gl_LocalInvocationID.x == 0u) {
+        outv[2u * pc.slot] = uvec4(uint(c1 - c0), uint(c2 - c1), uint(r1 - r0), 0u);
+        outv[2u * pc.slot + 1u] = uvec4(uint(p), uint(p >> 32), 0u, 0u);
+    }
+#else
+    uint64_t c1 = clockARB();
+    uint64_t r1 = clockRealtimeEXT();
+    if (gl_LocalInvocationID.x == 0u) {
+        outv[2u * pc.slot] = uvec4(uint(c1 - c0), 0u, uint(r1 - r0), 0u);
+        outv[2u * pc.slot + 1u] = uvec4(uint(p), uint(p >> 32), 0u, 0u);
+    }
+#endif
+}

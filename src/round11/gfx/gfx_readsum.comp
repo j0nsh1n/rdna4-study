@@ -1,0 +1,16 @@
+#version 450
+// Read-back pass of the compression arm: every texel of a w-wide image is read once per dispatch (lane i reads texels i, i + total, i + 2 total ...),
+// 16 bytes per thread at four texels each for RGBA8. The result is stored only when negative (never).
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) uniform sampler2D tex;
+layout(set = 0, binding = 1) buffer Out { vec4 o[]; } outb;
+layout(push_constant) uniform PC { uint w; uint per; uint total; uint u3; uint u4; uint u5; uint u6; uint u7; } pc;
+void main() {
+    const uint gid = gl_GlobalInvocationID.x;
+    vec4 acc = vec4(0.0);
+    for (uint i = 0u; i < pc.per; ++i) {
+        const uint p = i * pc.total + gid;
+        acc += texelFetch(tex, ivec2(int(p % pc.w), int(p / pc.w)), 0);
+    }
+    if (acc.x < -1.0) outb.o[gid] = acc;
+}

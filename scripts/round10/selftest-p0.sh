@@ -240,7 +240,9 @@ if waitfor "$RUNF/restore-claim"; then
     jp=$(cat "$RUNF/job.pid")
     wdp=""
     for d in /proc/[0-9]*; do
-        [[ $(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) == *"__watchdog $jp"* ]] && wdp=${d#/proc/}
+        c=""
+        { c=$(tr '\0' ' ' <"$d/cmdline"); } 2>/dev/null || continue
+        [[ $c == *"__watchdog $jp"* ]] && wdp=${d#/proc/}
     done
     [[ -n $wdp ]] && kill -KILL "$wdp"
     wait "$outer" 2>/dev/null; r=$?
@@ -286,10 +288,407 @@ else bad "fix 4: exit $r job fd '$jfd' probe '$probe' secret $([[ -e $C/secret ]
 mk f6
 printf 'x' >"$RF"
 out=$(drv "$DRIVER" --dry-run -- true 2>&1); r=$?
-out2=$(drv "$DRIVER" __locked true 2>&1); r2=$?
-if [[ $r == 2 && $r2 == 2 && ! -e $RUNF/pinned && $(lvl) == auto ]] && ! grep -q "write" "$RUNF/events.log" 2>/dev/null; then
+mkdir -p "$RUNF"
+exec 9>>"$LOCKF" || { bad "fix 6: cannot open fd 9"; exec 9>&-; }
+if flock -n 9; then
+    out2=$(drv R10_DRY=1 "$DRIVER" __locked true 2>&1); r2=$?
+else
+    bad "fix 6: could not hold the scratch lock on fd 9"
+    out2="" r2=99
+fi
+exec 9>&-
+# R10_DRY=1 gets __locked past guard_exit, so the exit 2 below must come from the locked job's own RESTORE-FAILED check
+if [[ $r == 2 && $r2 == 2 && $out2 == *"NOT CHANGED:"* && ! -e $RUNF/pinned && $(lvl) == auto ]] && ! grep -q "write" "$RUNF/events.log" 2>/dev/null; then
     ok "fix 6: with RESTORE-FAILED present the driver refuses (exit 2) and so does a direct __locked; nothing written"
-else bad "fix 6: exit $r / $r2"; fi
+else bad "fix 6: exit $r / $r2, out2: $out2"; fi
+
+# ---- follow-ups from the Neon confirm review (CONFIRM-P0.md) ----
+# N1: a dry run whose R10_LOCK is the hardcoded checkout default lock is refused BEFORE flock, even when STUDY_GPU_LOCK points elsewhere.
+# The driver is copied into a scratch repo tree so its <repo>/runs/gpu.lock is a scratch file: the real lock is never touched.
+mk n1
+FR=$C/fakerepo
+mkdir -p "$FR/scripts/round10" "$FR/runs"
+cp "$DRIVER" "$FR/scripts/round10/pin_mclk.sh"
+chmod +x "$FR/scripts/round10/pin_mclk.sh"
+FLOCK=$FR/runs/gpu.lock
+: >"$FLOCK"
+n1run() { drv STUDY_GPU_LOCK="$C/other-lock" R10_LOCK="$FLOCK" R10_LOCK_WAIT=2 timeout 20 "$1" --dry-run -- true 2>&1; }
+out=$(n1run "$FR/scripts/round10/pin_mclk.sh"); r=$?
+if [[ $r == 2 && $out == *"a dry run needs R10_LOCK"* && ! -e $RUNF ]]; then
+    ok "follow-up 1: dry run with R10_LOCK = the checkout default lock (STUDY_GPU_LOCK elsewhere) is refused before flock (exit 2, no run folder)"
+else bad "follow-up 1: exit $r, out: $out"; fi
+sed 's/ && \$(readlink -f "\$R10_LOCK") != "\$(readlink -f "\$REPO\/runs\/gpu\.lock")" \]\]/ ]]/' "$FR/scripts/round10/pin_mclk.sh" >"$FR/scripts/round10/pin_nolockchk.sh"
+chmod +x "$FR/scripts/round10/pin_nolockchk.sh"
+if cmp -s "$FR/scripts/round10/pin_mclk.sh" "$FR/scripts/round10/pin_nolockchk.sh"; then bad "follow-up 1 break: the sed did not change the copy"; else
+    rm -rf "$RUNF"
+    out=$(n1run "$FR/scripts/round10/pin_nolockchk.sh"); r=$?
+    [[ -e $RUNF ]] && ok "follow-up 1 break: a copy without the default-lock check goes on to make the run folder and take the lock (exit $r), so the check above can fail" || bad "follow-up 1 break: copy still refused (exit $r): $out"
+fi
+# N2: __locked refuses at its very top: with no switch it must not even write job.pid, events.log or locked into the run folder.
+mk n2
+mkdir -p "$RUNF"
+out=$(drv timeout 10 "$DRIVER" __locked true 2>&1); r=$?
+if [[ $r == 2 && ! -e $RUNF/job.pid && ! -e $RUNF/events.log && ! -e $RUNF/locked ]]; then
+    ok "follow-up 2: __locked refused by the guard writes nothing into the run folder (no job.pid, events.log, locked)"
+else bad "follow-up 2: exit $r, run folder holds: $(ls "$RUNF" 2>/dev/null | tr '\n' ' ')"; fi
+# N3a: restore.rc is written by rename, never by redirect. The link is planted after the claim and before put_rc
+# (the run folder must start empty: a reused folder is refused). A redirect would write through the link.
+mk n3a
+printf 'untouched' >"$C/rc-target"
+drv R10_TEST_RESTORE_DELAY=2 R10_TEST_RESTORE_DELAY_WHO=job "$DRIVER" --dry-run -- true >/dev/null 2>&1 &
+outer=$!
+if waitfor "$RUNF/restore-claim"; then
+    ln -sfn "$C/rc-target" "$RUNF/restore.rc"
+    wait "$outer"; r=$?
+else
+    r=99
+    kill -KILL "$outer" 2>/dev/null; wait "$outer" 2>/dev/null
+fi
+if [[ $r == 0 && ! -L $RUNF/restore.rc && $(<"$RUNF/restore.rc") == 0 && $(<"$C/rc-target") == untouched ]]; then
+    ok "follow-up 3a: restore.rc was replaced by rename (regular file holding 0); the symlink target was not written through"
+else bad "follow-up 3a: exit $r, restore.rc $([[ -L $RUNF/restore.rc ]] && echo 'still a symlink' || echo regular), target '$(<"$C/rc-target")'"; fi
+# N3b: alive()/claim_alive() parse /proc/<pid>/stat correctly when comm holds spaces and ')'. The functions are cut out of the driver.
+mk n3b
+fn_src=$(sed -n '/^pstat() {/,/^}/p;/^alive() {/,/^}/p;/^claim_alive() {/,/^}/p' "$DRIVER")
+mkfifo "$C/fifo"
+bash -c 'printf "a b) Z c" >/proc/self/comm; read -t 25 <>"$1"' _ "$C/fifo" &
+LIVE=$!
+bash -c 'bash -c "printf \"a b) c\" >/proc/self/comm" & echo $! >"$1"; exec sleep 6' _ "$C/zpid" &
+ZPAR=$!
+waitfor "$C/zpid"; sleep 0.3
+ZOMB=$(<"$C/zpid")
+want_start=$(sed 's/^.*) //' "/proc/$LIVE/stat" | awk '{print $20}')
+res=$(bash -c "$fn_src"'
+    st=$(pstat "$1") && [[ ${st#* } == "$3" ]] && echo live-start-ok
+    alive "$1" && echo live-alive
+    claim_alive "$1" "$3" && echo claim-match
+    claim_alive "$1" 1 || echo claim-reused-pid-dead
+    alive "$2" || echo zombie-not-alive
+    alive 99999999 || echo gone-not-alive' _ "$LIVE" "$ZOMB" "$want_start" 2>&1 | tr '\n' ' ')
+exp="live-start-ok live-alive claim-match claim-reused-pid-dead zombie-not-alive gone-not-alive "
+if [[ $(<"/proc/$LIVE/comm") == "a b) Z c" && $(<"/proc/$ZOMB/comm") == "a b) c" && $res == "$exp" ]]; then
+    ok "follow-up 3b: alive()/claim_alive() right for comm 'a b) Z c' (live, start time matches), a zombie with comm 'a b) c', a reused-pid start time and a missing pid"
+else bad "follow-up 3b: got '$res' want '$exp' (comm live '$(<"/proc/$LIVE/comm" 2>/dev/null)' zombie '$(<"/proc/$ZOMB/comm" 2>/dev/null)')"; fi
+kill "$LIVE" "$ZPAR" 2>/dev/null; wait "$LIVE" "$ZPAR" 2>/dev/null
+# N3c: a restore claim whose pid is alive but whose recorded start time is not that process's (pid reuse) is taken over at once, not after 120 s.
+n3c() { # n3c <driver>: after the payload starts, plants a claim naming a LIVE process with a wrong start time. Sets EL and RR.
+    mk n3c
+    drv timeout 20 "$1" --dry-run -- sleep 2 >/dev/null 2>&1 &
+    local outer=$! lp="" jp="" d cmd t0
+    EL=99
+    RR=99
+    if waitfor "$RUNF/payload.pid"; then
+        mkdir -p "$RUNF/restore-claim"
+        sleep 60 &
+        lp=$!
+        echo "$lp 1" >"$RUNF/restore-claim/pid"
+        t0=$SECONDS
+        wait "$outer"
+        RR=$?
+        EL=$((SECONDS - t0))
+    else
+        kill -KILL "$outer" 2>/dev/null || true
+        wait "$outer" 2>/dev/null || true
+    fi
+    jp=$(cat "$RUNF/job.pid" 2>/dev/null || true)
+    if [[ -n $jp ]]; then
+        for d in /proc/[0-9]*; do
+            { cmd=$(tr '\0' ' ' <"$d/cmdline"); } 2>/dev/null || continue
+            [[ $cmd == *"__watchdog $jp"* ]] && kill -KILL "${d#/proc/}" 2>/dev/null || true
+        done
+    fi
+    [[ -n $lp ]] && kill -KILL "$lp" 2>/dev/null || true
+    [[ -n $lp ]] && wait "$lp" 2>/dev/null || true
+}
+n3c "$DRIVER"; el=$EL r=$RR
+if [[ $r == 0 ]] && ((el < 12)) && grep -q 'died before restore.rc; taking over' "$RUNF/events.log" && [[ $(lvl) == auto && ! -e $RF ]]; then
+    ok "follow-up 3c: a claim naming a live process with a different start time was taken over at once (${el} s, exit 0, level auto)"
+else bad "follow-up 3c: exit $r after ${el} s, level $(lvl)"; fi
+sed '/R10-STARTTIME/d' "$DRIVER" >"$T/bin/pin_nostart.sh"
+chmod +x "$T/bin/pin_nostart.sh"
+n3c "$T/bin/pin_nostart.sh"; el=$EL r=$RR
+if [[ $r != 0 ]] && ! grep -q 'taking over' "$RUNF/events.log" 2>/dev/null; then
+    ok "follow-up 3c break: a copy without the start-time check keeps waiting on the reused pid (killed by timeout after ${el} s, exit $r), so the case above can fail"
+else bad "follow-up 3c break: the copy still took over (exit $r after ${el} s)"; fi
+# N4: an R10_CRED_FD inherited from the caller is ignored on a dry run without a secret file, and is never put into the bash -c string.
+mk n4
+PWN=$C/pwned
+out=$(drv R10_CRED_FD="1>&1; touch $PWN #" timeout 20 "$DRIVER" --dry-run -- bash -c 'echo "var=${R10_CRED_FD:-unset}" >"$1"' _ "$C/n4-env" 2>&1); r=$?
+if [[ $r == 0 && ! -e $PWN && $(<"$C/n4-env") == var=unset ]] && ! grep -q 'credential descriptor' "$RUNF/events.log"; then
+    ok "follow-up 4: an inherited R10_CRED_FD (with a command in it) is ignored on a dry run without a secret file: no command ran, payload runs, variable unset, no 'credential descriptor' logged"
+else bad "follow-up 4: exit $r, pwned $([[ -e $PWN ]] && echo yes || echo no), env '$(cat "$C/n4-env" 2>/dev/null)'"; fi
+sed '/unset R10_CRED_FD # only cred_open/d' "$DRIVER" >"$T/bin/pin_nounset.sh"
+sed -i 's/\[\[ \${R10_CRED_FD:-} =~ \^\[0-9\]+\$ \]\] && extra/[[ -n ${R10_CRED_FD:-} ]] \&\& extra/' "$T/bin/pin_nounset.sh"
+chmod +x "$T/bin/pin_nounset.sh"
+mk n4b
+if cmp -s "$DRIVER" "$T/bin/pin_nounset.sh"; then bad "follow-up 4 break: the sed did not change the copy"; else
+    drv R10_CRED_FD="1>&1; touch $PWN #" timeout 20 "$T/bin/pin_nounset.sh" --dry-run -- true >/dev/null 2>&1
+    [[ -e $PWN ]] && ok "follow-up 4 break: a copy with neither the unset nor the digit check runs the injected command (the test can see it)" || bad "follow-up 4 break: no injection even without both fixes"
+fi
+
+# Kimi #5: a second run in the same folder is refused before the lock, so stale done/restore.rc cannot skip a restore.
+mk k5
+out1=$(drv "$DRIVER" --dry-run -- true 2>&1); r1=$?
+sz=$(wc -c <"$RUNF/events.log")
+out2=$(drv "$DRIVER" --dry-run -- true 2>&1); r2=$?
+sz2=$(wc -c <"$RUNF/events.log")
+flock -n "$LOCKF" true; fl=$?
+if [[ $r1 == 0 && $r2 == 2 && $out2 == *"not empty"* && $sz2 == "$sz" && $(lvl) == auto && $fl == 0 ]]; then
+    ok "kimi 5: a second run in the same folder is refused before the lock (exit 2, events unchanged, level auto, lock free)"
+else bad "kimi 5: first $r1 second $r2 flock $fl level $(lvl) events $sz->$sz2: $out2"; fi
+awk '
+    /^# R10-RUN-DIR$/ { print "mkdir -p \"$R10_RUN\" || exit 2"; skip=1; next }
+    /^# R10-RUN-DIR-END$/ { skip=0; next }
+    skip { next }
+    { print }
+' "$DRIVER" >"$T/bin/pin_reusedir.sh"
+chmod +x "$T/bin/pin_reusedir.sh"
+if cmp -s "$DRIVER" "$T/bin/pin_reusedir.sh"; then bad "kimi 5 break: the copy is unchanged"; else
+    mk k5red
+    drv timeout 30 "$T/bin/pin_reusedir.sh" --dry-run -- true >/dev/null 2>&1; rA=$?
+    drv timeout 30 "$T/bin/pin_reusedir.sh" --dry-run -- true >/dev/null 2>&1; rB=$?
+    for d in /proc/[0-9]*; do
+        { cmd=$(tr '\0' ' ' <"$d/cmdline"); } 2>/dev/null || continue
+        [[ $cmd == *"pin_reusedir.sh"* && $cmd == *__watchdog* ]] && kill -KILL "${d#/proc/}" 2>/dev/null || true
+    done
+    if [[ $rA == 0 && $(lvl) != auto ]]; then
+        ok "kimi 5 break: a copy that reuses the folder leaves level '$(lvl)' after the second run (exit $rB)"
+    else bad "kimi 5 break: first $rA second $rB level $(lvl) (the second run should leave a non-auto level)"; fi
+fi
+# Kimi #6: no sidecar. auto and at least two listed levels is the only known-full state.
+mk k6auto
+if [[ -e $SYS/.mclk-mask ]]; then bad "kimi 6 setup: a sidecar is present"; else
+    out=$(drv "$DRIVER" --dry-run -- true 2>&1); r=$?
+    if [[ $r == 0 && $(lvl) == auto && -e $RUNF/changed-by-us ]] && grep -q RESTORE-OK "$RUNF/events.log" && [[ $out != *"NOT CHANGED:"* ]]; then
+        ok "kimi 6: real format, level auto, six levels, no sidecar: accepted and restored"
+    else bad "kimi 6 auto: exit $r level $(lvl): $out"; fi
+fi
+mk k6man
+printf 'manual' >"$SYS/power_dpm_force_performance_level"
+rm -f "$SYS/.mclk-mask"
+out=$(drv "$DRIVER" --dry-run -- true 2>&1); r=$?
+if [[ $r == 20 && $out == *"NOT CHANGED: level was 'manual'"* && $out != *"mask 'all'"* && $(lvl) == manual ]] && ! grep -q "write '" "$RUNF/events.log"; then
+    ok "kimi 6: real format, level manual: fail closed (exit 20), not reported as mask all"
+else bad "kimi 6 manual: exit $r: $out"; fi
+mk k6un
+chmod 000 "$SYS/power_dpm_force_performance_level"
+rm -f "$SYS/.mclk-mask"
+out=$(drv "$DRIVER" --dry-run -- true 2>&1); r=$?
+chmod 644 "$SYS/power_dpm_force_performance_level" 2>/dev/null || true
+if [[ $r == 20 && $out == *"unreadable"* && $out != *"mask 'all'"* ]] && ! grep -q "write '" "$RUNF/events.log" 2>/dev/null; then
+    ok "kimi 6: an unreadable performance level fails closed"
+else bad "kimi 6 unreadable: exit $r: $out"; fi
+awk '
+    /^[[:space:]]*# R10-REAL-MASK$/ {
+        print "    n=$(all_indices \"$R10_SYSFS/$MCLK_F\" | wc -w)"
+        print "    n=${n//[[:space:]]/}"
+        print "    if ((n >= 2)); then echo all; else echo \"limited: $n\"; fi"
+        skip=1; next
+    }
+    /^[[:space:]]*# R10-REAL-MASK-END$/ { skip=0; next }
+    skip { next }
+    { print }
+' "$DRIVER" >"$T/bin/pin_maskcount.sh"
+chmod +x "$T/bin/pin_maskcount.sh"
+if cmp -s "$DRIVER" "$T/bin/pin_maskcount.sh"; then bad "kimi 6 break: the copy is unchanged"; else
+    mk k6red
+    printf 'manual' >"$SYS/power_dpm_force_performance_level"
+    rm -f "$SYS/.mclk-mask"
+    # The job also refuses a non-auto level, so the old bug is in mask_state itself: six listed levels became "all".
+    {
+        sed -n '/^LEVEL_F=/p;/^MCLK_F=/p;/^dry() /p;/^level_now() /p;/^all_indices() /p' "$DRIVER"
+        sed -n '/^mask_state() {/,/^}/p' "$T/bin/pin_maskcount.sh"
+        echo 'mask_state'
+    } >"$C/runmask.sh"
+    got=$(R10_DRY=1 R10_SYSFS="$SYS" R10_RUN="$RUNF" bash "$C/runmask.sh")
+    if [[ $got == all ]]; then
+        ok "kimi 6 break: the old mask_state reports 'all' for a manual level with six listed levels"
+    else bad "kimi 6 break: old mask_state said '$got'"; fi
+fi
+# Kimi #7: __locked with the owner switch set, and fd 9 not the lock, writes nothing and does not call sudo.
+mk k7
+printf 'stub-secret-not-real' >"$C/secret"
+before=0
+[[ -f $sudo_log ]] && before=$(wc -l <"$sudo_log")
+out=$(drv R10_ALLOW_REAL_SYSFS_WRITES=yes-owner-approved R10_SECRET_FILE="$C/secret" timeout 10 "$DRIVER" __locked true 2>&1); r=$?
+after=0
+[[ -f $sudo_log ]] && after=$(wc -l <"$sudo_log")
+if [[ $r == 2 && $out == *"fd 9"* && ! -e $RUNF/job.pid && -e $C/secret && $after == "$before" && $(lvl) == auto ]]; then
+    ok "kimi 7: __locked with the owner switch but without fd 9 exits 2 before any run file; stub sudo not called"
+else bad "kimi 7: exit $r sudo lines $before->$after job.pid $([[ -e $RUNF/job.pid ]] && echo present || echo absent): $out"; fi
+sed '/R10-LOCK-FD/d' "$DRIVER" >"$T/bin/pin_nolockfd.sh"
+chmod +x "$T/bin/pin_nolockfd.sh"
+if cmp -s "$DRIVER" "$T/bin/pin_nolockfd.sh"; then bad "kimi 7 break: the copy is unchanged"; else
+    mk k7red
+    mkdir -p "$RUNF"
+    printf 'stub-secret-not-real' >"$C/secret"
+    mkdir -p "$C/bin"
+    printf '#!/bin/sh\necho "sudo $*" >>"%s/private-sudo.log"\nexit 1\n' "$C" >"$C/bin/sudo"
+    chmod +x "$C/bin/sudo"
+    oldpath=$PATH
+    PATH="$C/bin:$PATH"
+    out=$(drv R10_ALLOW_REAL_SYSFS_WRITES=yes-owner-approved R10_SECRET_FILE="$C/secret" timeout 10 "$T/bin/pin_nolockfd.sh" __locked true 2>&1); r=$?
+    PATH=$oldpath
+    jp=$(cat "$RUNF/job.pid" 2>/dev/null || true)
+    if [[ -n $jp ]]; then
+        for d in /proc/[0-9]*; do
+            { cmd=$(tr '\0' ' ' <"$d/cmdline"); } 2>/dev/null || continue
+            [[ $cmd == *"__watchdog $jp"* ]] && kill -KILL "${d#/proc/}" 2>/dev/null || true
+        done
+    fi
+    if [[ -e $RUNF/job.pid || -s $C/private-sudo.log ]]; then
+        ok "kimi 7 break: without the fd 9 check, __locked writes a run file or calls sudo (exit $r)"
+    else bad "kimi 7 break: still refused with no run file and no sudo call (exit $r): $out"; fi
+    # the private stub must be the one that ran, never the suite stub
+    [[ -e $T/sudo-calls.log ]] && bad "kimi 7 break: the suite sudo stub was called"
+fi
+
+# Kimi R2 #1: fd 9 open on the right file is not proof of the lock. __locked must also see an exclusive flock held by that very descriptor.
+# k7run <case> <driver> <holder 0|1>: fd 9 opened on the lock WITHOUT flock; holder=1 means another process holds the flock. Sets r, out, rj (job.pid present), rs (private sudo called).
+k7run() {
+    mk "$1"
+    mkdir -p "$RUNF" "$C/bin"
+    printf 'stub-secret-not-real' >"$C/secret"
+    printf '#!/bin/sh\necho "sudo $*" >>"%s/private-sudo.log"\nexit 1\n' "$C" >"$C/bin/sudo"
+    chmod +x "$C/bin/sudo"
+    local hp="" oldpath=$PATH
+    if [[ $3 == 1 ]]; then
+        flock "$LOCKF" sleep 20 &
+        hp=$!
+        sleep 0.4
+    fi
+    PATH="$C/bin:$PATH"
+    out=$(
+        exec 9>>"$LOCKF"
+        drv R10_ALLOW_REAL_SYSFS_WRITES=yes-owner-approved R10_SECRET_FILE="$C/secret" timeout 10 "$2" __locked true 2>&1
+    ); r=$?
+    PATH=$oldpath
+    [[ -n $hp ]] && { kill "$hp" 2>/dev/null; wait "$hp" 2>/dev/null; }
+    rj=0 rs=0
+    [[ -e $RUNF/job.pid ]] && rj=1
+    [[ -s $C/private-sudo.log ]] && rs=1
+    local jp
+    jp=$(cat "$RUNF/job.pid" 2>/dev/null || true)
+    if [[ -n $jp ]]; then
+        for d in /proc/[0-9]*; do
+            { cmd=$(tr '\0' ' ' <"$d/cmdline"); } 2>/dev/null || continue
+            [[ $cmd == *"__watchdog $jp"* ]] && kill -KILL "${d#/proc/}" 2>/dev/null || true
+        done
+    fi
+}
+k7run k7unlocked "$DRIVER" 0
+if [[ $r == 2 && $out == *"fd 9"* && $rj == 0 && $rs == 0 && -e $C/secret && $(lvl) == auto ]]; then
+    ok "kimi R2 1a: fd 9 open on the lock but never flocked: __locked exits 2 before any run file or sudo call"
+else bad "kimi R2 1a: exit $r job.pid $rj sudo $rs: $out"; fi
+k7run k7held "$DRIVER" 1
+if [[ $r == 2 && $out == *"fd 9"* && $rj == 0 && $rs == 0 && -e $C/secret && $(lvl) == auto ]]; then
+    ok "kimi R2 1b: another process holds the flock and this fd 9 does not: __locked exits 2 before any run file or sudo call"
+else bad "kimi R2 1b: exit $r job.pid $rj sudo $rs: $out"; fi
+# red: an inode-only check (the old behaviour) lets both through
+sed '/^    \[\[ -n \$want && \$want == "\$got" \]\] || return 1$/a\    return 0' "$DRIVER" >"$T/bin/pin_inodeonly.sh"
+chmod +x "$T/bin/pin_inodeonly.sh"
+if cmp -s "$DRIVER" "$T/bin/pin_inodeonly.sh"; then bad "kimi R2 1 break: the copy is unchanged"; else
+    k7run k7redA "$T/bin/pin_inodeonly.sh" 0
+    ra=$((rj + rs))
+    k7run k7redB "$T/bin/pin_inodeonly.sh" 1
+    rb=$((rj + rs))
+    if ((ra > 0 && rb > 0)); then
+        ok "kimi R2 1 break: with an inode-only fd 9 check, both the unlocked and the competing-holder case get past the guard"
+    else bad "kimi R2 1 break: red copy still refused (unlocked $ra, competing $rb)"; fi
+fi
+
+# Real-hardware regression (2026-11-26): amdgpu appends a trailing space to every inactive pp_dpm_mclk line
+# ("1: 456Mhz ") and no trailing space after "*" on the active line ("1: 456Mhz *"). If the active level moves
+# between before and after restore (e.g. 1 -> 3), listing() must strip trailing spaces on all lines so restore
+# does not falsely trigger RESTORE-FAILED while level=auto and mask=all.
+mk_amdgpu_mclk() { # mk_amdgpu_mclk <file> <active_idx>
+    local f=$1 act=$2 i
+    local vals=("0: 96Mhz" "1: 456Mhz" "2: 772Mhz" "3: 875Mhz" "4: 1124Mhz" "5: 1258Mhz")
+    : >"$f"
+    for i in "${!vals[@]}"; do
+        if [[ $i == "$act" ]]; then
+            printf '%s *\n' "${vals[$i]}" >>"$f"
+        else
+            printf '%s \n' "${vals[$i]}" >>"$f"
+        fi
+    done
+}
+mk hwstar
+mk_amdgpu_mclk "$SYS/pp_dpm_mclk" 1
+out=$(drv "$DRIVER" --dry-run --level 5 -- bash -c "printf '0: 96Mhz \n1: 456Mhz \n2: 772Mhz \n3: 875Mhz *\n4: 1124Mhz \n5: 1258Mhz \n' >'$SYS/pp_dpm_mclk'" 2>&1); r=$?
+if [[ $r == 0 && $(lvl) == auto && ! -e $RF ]] && grep -q 'RESTORE-OK level=auto mask=all' "$RUNF/events.log"; then
+    ok "hw-star-move: active '*' moving 1->3 with amdgpu trailing spaces still reports RESTORE-OK (no false RESTORE-FAILED)"
+else
+    bad "hw-star-move: exit $r lvl=$(lvl) rf=$([[ -e $RF ]] && echo present || echo absent): $out"
+fi
+python3 -I - "$DRIVER" "$T/bin/pin_oldlisting.sh" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+lines = open(src, encoding="utf-8").readlines()
+out = []
+for ln in lines:
+    if "# R10-LISTING-NORM" in ln:
+        out.append('listing() { sed \'s/[[:space:]]*\\*[[:space:]]*$//\' "$R10_SYSFS/$MCLK_F" 2>/dev/null; }\n')
+    else:
+        out.append(ln)
+open(dst, "w", encoding="utf-8").writelines(out)
+PY
+chmod +x "$T/bin/pin_oldlisting.sh"
+if cmp -s "$DRIVER" "$T/bin/pin_oldlisting.sh"; then bad "hw-star-move break: copy unchanged"; else
+    mk hwstarred
+    mk_amdgpu_mclk "$SYS/pp_dpm_mclk" 1
+    out=$(drv "$T/bin/pin_oldlisting.sh" --dry-run --level 5 -- bash -c "printf '0: 96Mhz \n1: 456Mhz \n2: 772Mhz \n3: 875Mhz *\n4: 1124Mhz \n5: 1258Mhz \n' >'$SYS/pp_dpm_mclk'" 2>&1); r=$?
+    if [[ $r == 21 && -e $RF ]]; then
+        ok "hw-star-move break: old listing() sed falsely exits 21 (RESTORE-FAILED) when active '*' moves 1->3"
+    else
+        bad "hw-star-move break: expected exit 21 + RESTORE-FAILED, got exit $r rf=$([[ -e $RF ]] && echo present || echo absent): $out"
+    fi
+fi
+
+# Kimi follow-up (2026-11-26): narrow the SIGKILL window between writing `manual` and creating `changed-by-us`.
+# With `pin-attempt` written before the first write, killing the locked job right after `manual` still causes
+# the watchdog to restore `auto` + full mask before releasing the lock.
+mk pinwin
+drv R10_TEST_PAUSE_BEFORE_MARK=2 "$DRIVER" --dry-run --level 3 -- sleep 5 >"$C/out" 2>&1 &
+p=$!
+w=0; while [[ $(lvl) != manual ]] && ((w < 100)); do sleep 0.05; w=$((w + 1)); done
+jp=$(cat "$RUNF/job.pid" 2>/dev/null || true)
+[[ -n $jp ]] && kill -KILL "$jp" 2>/dev/null
+wait "$p" 2>/dev/null
+# wait for lock free (watchdog done restoring)
+if ! flock -w 10 "$LOCKF" true; then bad "pin-attempt-window: lock not freed within 10 s"; fi
+if [[ $(lvl) == auto && ! -e $RUNF/changed-by-us && -e $RUNF/pin-attempt && ! -e $RF ]] && grep -q 'RESTORE-OK level=auto mask=all' "$RUNF/events.log"; then
+    ok "pin-attempt-window: SIGKILL between manual write and changed-by-us still restores to auto via pin-attempt"
+else
+    bad "pin-attempt-window: lvl=$(lvl) cbu=$([[ -e $RUNF/changed-by-us ]] && echo y || echo n) pa=$([[ -e $RUNF/pin-attempt ]] && echo y || echo n) rf=$([[ -e $RF ]] && echo y || echo n)"
+fi
+sed '/R10-PIN-ATTEMPT$/d' "$DRIVER" >"$T/bin/pin_noattempt.sh"
+chmod +x "$T/bin/pin_noattempt.sh"
+if cmp -s "$DRIVER" "$T/bin/pin_noattempt.sh"; then bad "pin-attempt-window break: copy unchanged"; else
+    mk pinwinred
+    drv R10_TEST_PAUSE_BEFORE_MARK=2 "$T/bin/pin_noattempt.sh" --dry-run --level 3 -- sleep 5 >"$C/out" 2>&1 &
+    p=$!
+    w=0; while [[ $(lvl) != manual ]] && ((w < 100)); do sleep 0.05; w=$((w + 1)); done
+    jp=$(cat "$RUNF/job.pid" 2>/dev/null || true)
+    [[ -n $jp ]] && kill -KILL "$jp" 2>/dev/null
+    wait "$p" 2>/dev/null
+    if ! flock -w 10 "$LOCKF" true; then bad "pin-attempt-window break: lock not freed within 10 s"; fi
+    if [[ $(lvl) == manual ]] && grep -q 'RESTORE-SKIPPED nothing was changed by us' "$RUNF/events.log"; then
+        ok "pin-attempt-window break: without pin-attempt, SIGKILL in that window skips restore and leaves level manual"
+    else
+        bad "pin-attempt-window break: expected manual + RESTORE-SKIPPED, got lvl=$(lvl)"
+    fi
+fi
+
+# Dry-run coverage for the job-side skip branch: pin-attempt exists, first write failed cleanly (state still auto/all).
+mk pinskip
+out=$(drv R10_INJECT=pin-write "$DRIVER" --dry-run --level 3 -- true 2>&1); r=$?
+if [[ $r == 23 && $(lvl) == auto && -e $RUNF/pin-attempt && ! -e $RUNF/changed-by-us && ! -e $RF ]] \
+    && grep -q 'RESTORE-SKIPPED pin attempted but state still auto/all' "$RUNF/events.log"; then
+    ok "pin-attempt-skip: failed first write leaves auto/all untouched and logs RESTORE-SKIPPED (exit 23)"
+else
+    bad "pin-attempt-skip: exit $r lvl=$(lvl) rf=$([[ -e $RF ]] && echo present || echo absent): $out"
+fi
 
 [[ -e $T/sudo-calls.log ]] && bad "the stub sudo was called: $(cat "$T/sudo-calls.log")" || ok "sudo was never called in any case"
 echo "scratch: $T"

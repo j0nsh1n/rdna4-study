@@ -1,0 +1,20 @@
+#version 450
+// Round 10 item 3: the producer of the 64-bit chain (HIP's k_prod write_line). Line s of the 4 MiB region (128 bytes) holds
+// in dwords 0-1 the absolute address of line next(s) = (a * s + c) & mask, in the others filler, so every line is written in
+// full. The region is addressed by buffer device address (push `base`), so the same chain works wherever the buffer lives.
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x_id = 0) in;
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer Words { uint w[]; };
+layout(push_constant) uniform PC {
+    uint64_t base;
+    uint a, c, mask, salt;
+} pc;
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    uint slot = tid >> 5u, lane = tid & 31u;
+    uint nxt = (pc.a * slot + pc.c) & pc.mask;
+    uint64_t adr = pc.base + uint64_t(nxt) * 128ul;
+    Words(pc.base).w[slot * 32u + lane] = lane == 0u ? uint(adr) : lane == 1u ? uint(adr >> 32) : (slot ^ pc.salt) + lane;
+}

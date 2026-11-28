@@ -1,0 +1,137 @@
+#version 450
+// Vulkan RADV CU-vs-WGP mode probe:
+// mode 0: 16 independent FMAs calibration (verifies clockARB() = exact shader cycles)
+// mode 1: K1 vs K2 workgroup barrier() loop (low cyc = CU mode, ~94+ cyc = WGP mode on gfx1201)
+// mode 2: whole-card 32-bit LDS read bandwidth (~21.9 TB/s CU mode vs ~11.5 TB/s WGP mode)
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_ARB_shader_clock : require
+#extension GL_EXT_shader_realtime_clock : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+layout(local_size_x_id = 0) in;
+
+#ifndef LDS_UINTS
+#define LDS_UINTS 4096
+#endif
+
+#if LDS_UINTS > 0
+shared uint lds[LDS_UINTS];
+#endif
+
+layout(push_constant) uniform PC {
+    uint mode;
+    uint k1;
+    uint k2;
+    uint reps;
+} pc;
+
+// Per-wave output: 24 uint64 values per wave slot
+layout(set = 0, binding = 0) buffer Out { uint64_t out64[]; };
+layout(set = 0, binding = 2) readonly buffer InF { float inf[]; };
+layout(set = 0, binding = 3) buffer Sink { float sink[]; };
+
+#define F(x) x = fma(va, vb, x)
+
+void main() {
+    uint w = gl_WorkGroupID.x * gl_NumSubgroups + gl_SubgroupID;
+    uint lane = gl_SubgroupInvocationID;
+    uint lid = gl_LocalInvocationIndex;
+    uint base = w * 24u;
+
+    if (pc.mode == 0u) {
+        // 16 independent FMAs, k1 vs k2 outer iters
+        float va = inf[lane];
+        float vb = inf[64u + lane];
+        float x0=0,x1=1,x2=2,x3=3,x4=4,x5=5,x6=6,x7=7;
+        float x8=8,x9=9,xa=10,xb=11,xc=12,xd=13,xe=14,xf=15;
+        for (uint r = 0u; r < pc.reps && r < 8u; r++) {
+            barrier();
+            uint64_t t0 = clockARB();
+            for (uint i = 0u; i < pc.k1; i++) {
+                F(x0); F(x1); F(x2); F(x3); F(x4); F(x5); F(x6); F(x7);
+                F(x8); F(x9); F(xa); F(xb); F(xc); F(xd); F(xe); F(xf);
+            }
+            uint64_t t1 = clockARB();
+            barrier();
+            uint64_t t2 = clockARB();
+            for (uint i = 0u; i < pc.k2; i++) {
+                F(x0); F(x1); F(x2); F(x3); F(x4); F(x5); F(x6); F(x7);
+                F(x8); F(x9); F(xa); F(xb); F(xc); F(xd); F(xe); F(xf);
+            }
+            uint64_t t3 = clockARB();
+            if (subgroupElect()) {
+                out64[base + 2u * r] = t1 - t0;
+                out64[base + 2u * r + 1u] = t3 - t2;
+            }
+        }
+        sink[lid] = x0+x1+x2+x3+x4+x5+x6+x7+x8+x9+xa+xb+xc+xd+xe+xf;
+    } else if (pc.mode == 1u) {
+        // Barrier slope: K1 vs K2 barriers per rep
+        uint acc = lid;
+#if LDS_UINTS > 0
+        if (lid < uint(LDS_UINTS)) lds[lid] = lid;
+#endif
+        for (uint r = 0u; r < pc.reps && r < 8u; r++) {
+            barrier();
+            uint64_t t0 = clockARB();
+            uint64_t rt0 = clockRealtimeEXT();
+            for (uint i = 0u; i < pc.k1; i++) {
+                barrier();
+            }
+            uint64_t t1 = clockARB();
+            uint64_t rt1 = clockRealtimeEXT();
+            barrier();
+            uint64_t t2 = clockARB();
+            uint64_t rt2 = clockRealtimeEXT();
+            for (uint i = 0u; i < pc.k2; i++) {
+                barrier();
+            }
+            uint64_t t3 = clockARB();
+            uint64_t rt3 = clockRealtimeEXT();
+            if (subgroupElect()) {
+                out64[base + 2u * r] = t1 - t0;
+                out64[base + 2u * r + 1u] = t3 - t2;
+                if (r == 0u) {
+                    out64[base + 16u] = rt1 - rt0;
+                    out64[base + 17u] = rt3 - rt2;
+                }
+            }
+        }
+#if LDS_UINTS > 0
+        acc += lds[lid % uint(LDS_UINTS)];
+#endif
+        sink[lid] = float(acc);
+    } else if (pc.mode == 2u) {
+#if LDS_UINTS >= 1024
+        // Whole-card 32-bit LDS read bandwidth (bank-conflict-free: lane i reads bank i & 31)
+        for (uint idx = lid; idx < uint(LDS_UINTS); idx += gl_WorkGroupSize.x) {
+            lds[idx] = idx * 1664525u + 1013904223u;
+        }
+        barrier();
+        uint s0 = 0u, s1 = 0u;
+        uint64_t t0 = clockARB();
+        uint64_t rt0 = clockRealtimeEXT();
+        for (uint i = 0u; i < pc.k1; i++) {
+            // 8 x 32-bit conflict-free LDS loads per lane per iter (128 B/cyc/CU peak in CU mode)
+            uint a0 = (lid + 0u) & (uint(LDS_UINTS) - 1u);
+            uint a1 = (lid + 256u) & (uint(LDS_UINTS) - 1u);
+            uint a2 = (lid + 512u) & (uint(LDS_UINTS) - 1u);
+            uint a3 = (lid + 768u) & (uint(LDS_UINTS) - 1u);
+            s0 ^= lds[a0]; s1 += lds[a1]; s0 ^= lds[a2]; s1 += lds[a3];
+            uint a4 = (lid + 128u) & (uint(LDS_UINTS) - 1u);
+            uint a5 = (lid + 384u) & (uint(LDS_UINTS) - 1u);
+            uint a6 = (lid + 640u) & (uint(LDS_UINTS) - 1u);
+            uint a7 = (lid + 896u) & (uint(LDS_UINTS) - 1u);
+            s0 ^= lds[a4]; s1 += lds[a5]; s0 ^= lds[a6]; s1 += lds[a7];
+        }
+        uint64_t t1 = clockARB();
+        uint64_t rt1 = clockRealtimeEXT();
+        if (subgroupElect()) {
+            out64[base + 0u] = t1 - t0;
+            out64[base + 1u] = rt1 - rt0;
+        }
+        sink[lid] = float(s0 ^ s1);
+#endif
+    }
+}

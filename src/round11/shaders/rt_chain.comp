@@ -1,0 +1,49 @@
+#version 460
+// Round 11 item 1, latency cells: ONE invocation (lane 0) traces `n` rays in a chain. The origin of ray i+1 is the origin of
+// ray i plus zero_buf[0] (a value the host writes as 0.0 at run time) times the committed hit distance, so the next ray cannot
+// start before the last one finished, and the compiler cannot know the term is zero. `dep` = 0 drops the term (a shader
+// variant for the report; the deliberate break of the plan keeps `dep` = 1 and activates all lanes instead, see r11_rt.c).
+// The cycle counter and the 100 MHz realtime counter bracket the loop (shader-clock, as src/vk's shaders do).
+#extension GL_GOOGLE_include_directive : require
+#include "rt_common.glsl"
+layout(local_size_x = 32) in;
+layout(set = 0, binding = 1) buffer Out { uvec4 o; };               // x,y cycles lo,hi; z realtime ticks; w hits
+layout(set = 0, binding = 2) readonly buffer Zero { float zero_f[]; };
+layout(push_constant) uniform PC {
+    uint n, dep, lanes;      // rays in the chain, dependency on/off, how many lanes run the chain (1 = the measurement)
+    uint nx, ny, ncell, seed;
+    float tmax;
+} pc;
+void main() {
+    if (gl_LocalInvocationID.x >= pc.lanes) return;
+    const float z = zero_f[0];
+    uint h = hash32(gl_LocalInvocationID.x + pc.seed);
+    float ox = float(h % pc.nx) + 0.25;
+    float oy = float((h >> 8) % pc.ny) + 0.25;
+    uint hits = 0;
+    uint64_t c0 = clockARB();
+    uint64_t r0 = clockRealtimeEXT();
+    for (uint i = 0; i < pc.n; ++i) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, tlas, gl_RayFlagsOpaqueEXT, 0xFF, vec3(ox, oy, 1.0), 0.0, vec3(0.0, 0.0, -1.0), pc.tmax);
+        while (rayQueryProceedEXT(rq)) { }
+        float t = 0.0;
+        if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+            hits++;
+            t = rayQueryGetIntersectionTEXT(rq, true);
+        } else {
+            t = pc.tmax;
+        }
+        // numerically neutral: z is 0.0 at run time. The next ray's origin moves by one lattice step in x regardless.
+        const uint step = (i + 1u) * 7u;
+        const float dx = (pc.dep != 0u) ? z * t : 0.0;
+        ox = float((h + step) % pc.nx) + 0.25 + dx;
+        oy = float(((h >> 8) + step * 3u) % pc.ny) + 0.25 + dx;
+    }
+    uint64_t c1 = clockARB();
+    uint64_t r1 = clockRealtimeEXT();
+    if (gl_LocalInvocationID.x == 0u) {
+        uint64_t dc = c1 - c0;
+        o = uvec4(uint(dc), uint(dc >> 32), uint(r1 - r0), hits);
+    }
+}

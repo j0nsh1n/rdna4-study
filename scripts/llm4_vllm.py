@@ -32,6 +32,14 @@ def make_llm(a):
               max_num_seqs=a.max_seqs, max_num_batched_tokens=a.batched_tokens)
     if a.eager:
         kw["enforce_eager"] = True
+    if a.cudagraph_mode or a.compilation_mode:
+        from vllm.config import CompilationConfig, CompilationMode, CUDAGraphMode
+        cc_kw = {}
+        if a.compilation_mode:
+            cc_kw["mode"] = getattr(CompilationMode, a.compilation_mode)
+        if a.cudagraph_mode:
+            cc_kw["cudagraph_mode"] = getattr(CUDAGraphMode, a.cudagraph_mode)
+        kw["compilation_config"] = CompilationConfig(**cc_kw)
     return LLM(**kw)
 
 
@@ -45,7 +53,18 @@ def task_bench(a):
     from vllm import SamplingParams
     ids, bos = load_ids(a.model, a.text)
     llm = make_llm(a)
-    res = {"task": "bench", "model": os.path.basename(a.model), "prefill": {}, "decode": {}}
+    res = {
+        "task": "bench",
+        "model": os.path.basename(a.model),
+        "eager": bool(a.eager),
+        "compilation_mode": a.compilation_mode,
+        "cudagraph_mode": a.cudagraph_mode,
+        "env_aot": os.environ.get("VLLM_USE_AOT_COMPILE"),
+        "env_standalone": os.environ.get("VLLM_USE_STANDALONE_COMPILE"),
+        "env_disable_cache": os.environ.get("VLLM_DISABLE_COMPILE_CACHE"),
+        "prefill": {},
+        "decode": {},
+    }
     sp1 = SamplingParams(max_tokens=1, temperature=0.0, ignore_eos=True)
     for n in a.prefill:
         p = ids[1:n + 1]
@@ -177,10 +196,13 @@ def task_trace(a):
 def selftest():
     # decode time arithmetic: 2 streams, 128 steps, (t2 - t1) = 0.5 s -> 512 tokens/s
     assert abs(2 * 128 / (1.0 - 0.5) - 512.0) < 1e-9
+    ap = build_parser()
+    a = ap.parse_args(["bench", "--cudagraph-mode", "PIECEWISE", "--compilation-mode", "VLLM_COMPILE"])
+    assert a.cudagraph_mode == "PIECEWISE" and a.compilation_mode == "VLLM_COMPILE" and not a.eager
     print("VERDICT llm4_vllm selftest PASS")
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("task", choices=["bench", "ppl", "trace", "loop", "selftest"])
     ap.add_argument("--model")
@@ -190,6 +212,8 @@ def main():
     ap.add_argument("--max-seqs", type=int, default=16)
     ap.add_argument("--batched-tokens", type=int, default=4096)
     ap.add_argument("--eager", action="store_true")
+    ap.add_argument("--cudagraph-mode", choices=["NONE", "PIECEWISE", "FULL", "FULL_DECODE_ONLY", "FULL_AND_PIECEWISE"], default=None)
+    ap.add_argument("--compilation-mode", choices=["NONE", "STOCK_TORCH_COMPILE", "DYNAMO_TRACE_ONCE", "VLLM_COMPILE"], default=None)
     ap.add_argument("--no-detok", action="store_true", help="do not detokenise the generated tokens (host-side work per step)")
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--prefill", type=int, nargs="*", default=[128, 512, 2048])
@@ -201,7 +225,11 @@ def main():
     ap.add_argument("--kind", default="prefill")
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--tokens", type=int, default=512)
-    a = ap.parse_args()
+    return ap
+
+
+def main():
+    a = build_parser().parse_args()
     if a.task == "selftest":
         return selftest()
     if a.task in ("trace", "loop"):

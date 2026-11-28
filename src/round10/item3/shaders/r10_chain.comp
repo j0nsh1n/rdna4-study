@@ -1,0 +1,19 @@
+#version 450
+// Round 10 item 3, strides and the reach test: node i (i < count) sits at byte offset i * stride from `base` and holds the
+// absolute address of node (i + 1) % count (a cyclic chain in address order, one node per stride). Only 8 bytes per node
+// are written.
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x_id = 0) in;
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer Node { uint64_t next; };
+layout(push_constant) uniform PC {
+    uint64_t base;
+    uint stride, count;
+} pc;
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    uint nx = i + 1u == pc.count ? 0u : i + 1u;
+    Node(pc.base + uint64_t(i) * uint64_t(pc.stride)).next = pc.base + uint64_t(nx) * uint64_t(pc.stride);
+}

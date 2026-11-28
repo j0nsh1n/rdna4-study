@@ -1,0 +1,101 @@
+#version 450
+// Blind Spot #10: Vulkan RADV wave32 vs wave64 loads beside FP8 cooperative-matrix WMMA.
+// Compile variants with -DMODE=0 (ref), -DMODE=1 (K=1 load per WMMA), -DMODE=8 (K=8 WMMAs per load).
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_float_e4m3 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_ARB_shader_clock : require
+#extension GL_EXT_shader_realtime_clock : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+layout(local_size_x_id = 0) in;
+
+#ifndef MODE
+#define MODE 0
+#endif
+
+#define MA coopmat<floate4m3_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+#define MB coopmat<floate4m3_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+#define MC coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+
+layout(push_constant) uniform PC {
+    uint iters;
+    uint tile_mask; // power-of-2 minus 1 number of 256-byte tiles in span
+    uint pad0;
+    uint pad1;
+} pc;
+
+layout(set = 0, binding = 0) buffer Out { uint64_t rec[]; }; // 4 u64 per subgroup: cyc, rt, check_bits, wgid
+layout(set = 0, binding = 2) readonly buffer BufA { floate4m3_t abuf[]; };
+layout(set = 0, binding = 3) readonly buffer BufB { floate4m3_t bbuf[]; };
+
+void main() {
+    uint w = gl_WorkGroupID.x * gl_NumSubgroups + gl_SubgroupID;
+    MA a0;
+    MB b0;
+    coopMatLoad(a0, abuf, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(b0, bbuf, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+
+    MC c0 = MC(0.0), c1 = MC(0.0), c2 = MC(0.0), c3 = MC(0.0);
+    uint tidx = w & pc.tile_mask;
+
+    barrier();
+    uint64_t k0 = clockARB();
+    uint64_t r0 = clockRealtimeEXT();
+
+    for (uint i = 0u; i < pc.iters; i++) {
+#if MODE == 0
+        c0 = coopMatMulAdd(a0, b0, c0);
+        c1 = coopMatMulAdd(a0, b0, c1);
+        c2 = coopMatMulAdd(a0, b0, c2);
+        c3 = coopMatMulAdd(a0, b0, c3);
+        c0 = coopMatMulAdd(a0, b0, c0);
+        c1 = coopMatMulAdd(a0, b0, c1);
+        c2 = coopMatMulAdd(a0, b0, c2);
+        c3 = coopMatMulAdd(a0, b0, c3);
+#elif MODE == 1
+        // K=1: 1 A+B load per WMMA (8 WMMAs per iter)
+        for (uint k = 0u; k < 2u; k++) {
+            uint o0 = ((tidx + 0u) & pc.tile_mask) * 256u;
+            uint o1 = ((tidx + 1u) & pc.tile_mask) * 256u;
+            uint o2 = ((tidx + 2u) & pc.tile_mask) * 256u;
+            uint o3 = ((tidx + 3u) & pc.tile_mask) * 256u;
+            MA la0; MB lb0; coopMatLoad(la0, abuf, o0, 16, gl_CooperativeMatrixLayoutRowMajor); coopMatLoad(lb0, bbuf, o0, 16, gl_CooperativeMatrixLayoutRowMajor);
+            c0 = coopMatMulAdd(la0, lb0, c0);
+            MA la1; MB lb1; coopMatLoad(la1, abuf, o1, 16, gl_CooperativeMatrixLayoutRowMajor); coopMatLoad(lb1, bbuf, o1, 16, gl_CooperativeMatrixLayoutRowMajor);
+            c1 = coopMatMulAdd(la1, lb1, c1);
+            MA la2; MB lb2; coopMatLoad(la2, abuf, o2, 16, gl_CooperativeMatrixLayoutRowMajor); coopMatLoad(lb2, bbuf, o2, 16, gl_CooperativeMatrixLayoutRowMajor);
+            c2 = coopMatMulAdd(la2, lb2, c2);
+            MA la3; MB lb3; coopMatLoad(la3, abuf, o3, 16, gl_CooperativeMatrixLayoutRowMajor); coopMatLoad(lb3, bbuf, o3, 16, gl_CooperativeMatrixLayoutRowMajor);
+            c3 = coopMatMulAdd(la3, lb3, c3);
+            tidx += 4u;
+        }
+#else
+        // K=8: 1 A+B load per 8 WMMAs (reused across 4 accumulators x 2)
+        uint o0 = (tidx & pc.tile_mask) * 256u;
+        coopMatLoad(a0, abuf, o0, 16, gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(b0, bbuf, o0, 16, gl_CooperativeMatrixLayoutRowMajor);
+        c0 = coopMatMulAdd(a0, b0, c0);
+        c1 = coopMatMulAdd(a0, b0, c1);
+        c2 = coopMatMulAdd(a0, b0, c2);
+        c3 = coopMatMulAdd(a0, b0, c3);
+        c0 = coopMatMulAdd(a0, b0, c0);
+        c1 = coopMatMulAdd(a0, b0, c1);
+        c2 = coopMatMulAdd(a0, b0, c2);
+        c3 = coopMatMulAdd(a0, b0, c3);
+        tidx += 1u;
+#endif
+    }
+
+    uint64_t k1 = clockARB();
+    uint64_t r1 = clockRealtimeEXT();
+    float chk = c0[0] + c1[0] + c2[0] + c3[0];
+    if (subgroupElect()) {
+        rec[w * 4u + 0u] = k1 - k0;
+        rec[w * 4u + 1u] = r1 - r0;
+        rec[w * 4u + 2u] = uint64_t(floatBitsToUint(chk));
+        rec[w * 4u + 3u] = uint64_t(gl_WorkGroupID.x);
+    }
+}

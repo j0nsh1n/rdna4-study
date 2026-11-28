@@ -1,0 +1,13 @@
+#version 450
+// Texture control: lane i samples u = (i + 0.5) / n at v = 0.5 and stores the result. Used on a constant texture (every filter must return the
+// constant) and on the 16-texel gradient (bilinear and nearest values are known in closed form).
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) uniform sampler2D tex;
+layout(set = 0, binding = 1) buffer Out { vec4 o[]; } outb;
+layout(push_constant) uniform PC { uint n; float gx; float gy; uint u3; uint u4; uint u5; uint u6; uint u7; } pc;
+void main() {
+    const uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.n) return;
+    const vec2 uv = vec2((float(gid) + 0.5) / float(pc.n), 0.5);
+    outb.o[gid] = textureGrad(tex, uv, vec2(pc.gx, 0.0), vec2(0.0, pc.gy));
+}

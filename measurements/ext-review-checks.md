@@ -2,7 +2,7 @@
 
 Worker run `20261126T024857-extcheck` (raw output in `runs/20261126T024857-extcheck/`, not committed). Labels: MEASURED
 (a program run here, CPU only), READ (from a file or document), INFERRED (reasoning), COMPILER (a compiler listing).
-**No GPU was used for anything below; card behaviour was not measured.** The RX 9070 XT is not installed.
+**No GPU was used for the three checks in this no-card run; card behaviour was not measured there.** The RX 9070 XT was not installed for that run. The dated section at the end is a later card run and is not part of `20261126T024857-extcheck`.
 
 ## Plain summary
 
@@ -13,7 +13,8 @@ Worker run `20261126T024857-extcheck` (raw output in `runs/20261126T024857-extch
    instruction) between the call and the matrix instruction, so that caller is not flagged. The same gap shape
    appears for gfx1200 and, with the gfx11 matrix builtins, for gfx1150/gfx1151. The per-lane `if` keeps the matrix
    instruction inside the branch in every build. Whether the *card* misbehaves for these listings was not measured
-   here (the 64-of-256 result is the study's earlier card run).
+   here (the 64-of-256 result is the study's earlier card run). On 2026-11-26 the same probes ran on the RX 9070 XT
+   under ROCm 10.2; that card run is the hardware follow-up section at the end of this file.
 2. **The two arithmetic models agree (check 2).** On the same inputs, AMD's rocjitsu `rj_arith` (bit-exact mode,
    built unmodified) and the study's `arith_model.h` give identical bits for all 11 dense gfx12 forms and all 9 sparse
    forms tried (8 float, IU8), more than a million outputs per form, including NaN/Infinity cases and the study's
@@ -22,11 +23,21 @@ Worker run `20261126T024857-extcheck` (raw output in `runs/20261126T024857-extch
    with *invalid* index values (which AMD's header calls unspecified), AMD's SIMD paths disagree with the study's model
    (which matched the card in the study's runs); AMD's own scalar path agrees with the study there.
    The three descriptions of the FP8 rule (study, AMD source, pips issue 17) agree in every point I compared.
-3. **Chance level of the 96 % coincidence (check 3): stopped at the baseline.** The raw event times of the `multi` run
-   were never saved (`sched_share multi` prints summaries only), so the 96.2 % / 95.6 % cannot be recomputed without
-   the card, and the brief's stop rule applies. As a proxy I ran the requested control (independent circular shifts,
-   1,000 shuffles) on the two-wave `pair small small` run, whose raw rows are saved: real 98.8 %, chance 0.16 % (95 %
-   range 0.0 to 0.6 %). That supports "far above chance" for that pair run; it is not the `multi` figure.
+3. **Chance level of the 96 % coincidence (check 3): closed by a 2026-11-26 card A/B run.** In the no-card run the raw
+   event times of the 16-wave `multi` run were not on disk (`sched_share multi` printed summaries only), so only the
+   two-wave `pair small small` proxy was computed (real 98.8 %, 1,000-shuffle chance 0.16 %, 95 % range 0.0 to 0.6 %).
+   On 2026-11-26, the same 16-wave binary (`r102-sched_share_dump`) recorded raw event times in three runs with both
+   displays on (`dpms=On`), followed 60 seconds later by three runs after the screensaver blanked both displays
+   (`dpms=Off`):
+   - **Displays on:** 683, 1,029, and 776 median events per wave in 0.500 s (`hw_changed=0` on every event); real
+     ±1 us coincidence median **95.70 % to 97.46 %** (same SE) and **95.71 % to 97.42 %** (different SE), against
+     **0.23 % to 0.27 %** after 1,000 independent circular shuffles (95 % upper bound at most **0.39 %**; same-offset
+     break PASS; `VERDICT multi_chance: PASS` 3 of 3).
+   - **Displays off (60 seconds later, same boot, driver, profile, and binary):** **0 events** across all 16 waves in
+     all three runs, reproducing the unattended Slot 1 result (0 events when `dpms=Off`). Active display DPMS drives
+     these card-wide pauses on this setup.
+
+![Displays-on vs displays-off 16-wave pause A/B and shuffle control](../figures/04_dpms_pauses_ab.png)
 
 ## Check 1: matrix hazard at a call boundary (listings only)
 
@@ -207,4 +218,86 @@ The recomputed real share matches the published 98.8 % exactly for the first run
 same 0.9880). The study already ran a fixed-shift control on this pair (`sched_pair.py --shift`: largest shifted share
 0.4 %); the table above adds the requested random-circular-shift distribution. What stays open: the same control on
 the 16-wave `multi` data (same engine vs different engines), which needs the card to record the event times (a one-line change
-to write `ev[g]` to a file would suffice).
+to write `ev[g]` to a file would suffice). Two 2026-11-26 card reruns below recorded those times: the unattended displays-off run had 0 events, and the later same-session displays-on vs displays-off A/B run closed the 16-wave chance figure.
+
+## Hardware follow-up on the RX 9070 XT (2026-11-26, Slot 1, OC profile)
+
+This section is a later card run. It is not part of the no-card run `20261126T024857-extcheck` above.
+
+**Setup (READ from `env-manifest.json`, generated 2026-11-26T12:51:01Z).** RX 9070 XT, PCI vendor:device `1002:7550`, VBIOS `115-G295BP00-100`. LACT track `overclock`: core offset +150 MHz, voltage offset -50 mV, memory-clock request 1409 MHz, performance level `auto`, power cap 374 W, power profile `BOOTUP_DEFAULT`. Linux 7.3.4-202. The manifest's toolchain record is ROCm 10.1.0 (AMD clang `d6f6cb69`, HIP 7.16.26385). The two jobs below were compiled with ROCm 10.2, AMD clang 24.0.0git `bdc35841`. A 1.2x regulator-level power-limit mod is installed on this card, so reported watts are low on the main rail. The correctness counts in this section do not depend on the clock. Raw logs are in the companion checkout's git-ignored build tree, folder `afk-r13/slot1-results/`, recorded 2026-11-26.
+
+### Check 1 hardware verification (ROCm 10.2.0, gfx1201, MEASURED)
+
+Folder `afk-r13/slot1-results/compiler-r102/`. Binaries match the recorded SHA256 sums. Listing scans PASS (haz_hazard 12 of 12 expect lines at -O3 and at -O1; haz_mask 8 of 8 at -O3, and 7 of 8 at -O1, the one difference being `k_asm_time` not unrolled, called harmless). Card id `0x7550`, hotspot 31 C and 14 GB available at the start. The four probe jobs exited 0. Both deliberate-break jobs exited 1, which is what the band checker requires. `kernel-faults.txt`: no amdgpu fault lines in the kernel log since 2026-11-26 04:51:01.
+
+**Call-boundary hazard (`haz_hazard`).** The same counts at -O3 and at -O1:
+
+| Result line | -O3 and -O1 |
+|---|---|
+| `hazard_asm_vnop` | PASS, 0 of 256 differ from the model |
+| `hazard_call_miss`, empty asm that only orders the loads | PASS, 64 of 256 differ from the model; 0 of 256 differ from the no-V_NOP inline-assembly result |
+| `hazard_call_miss`, plain C++ | PASS, 64 of 256 differ from the model; 0 of 256 differ from the no-V_NOP inline-assembly result |
+| `hazard_asm_no_vnop` | INFO, 64 of 256 differ from the model; repeat equal: yes |
+
+The other `haz_hazard` value checks at both opts are PASS with 0 wrong (straight line, bsrc, ordinary call, tied call, both branch flags, mixed FP16-as-BF16, loop n=1, 2 and 5, SGPR lanes, cmpx/permlane). Timing lines are not the claim of this check. At -O3 they read 47.01 cycles per compiler iteration, 41.36 for `asm_wait`, and 33.69 for `asm_nowait`. At -O1 they read 48.38, 41.33, and 32.32.
+
+**Per-lane `if` (`haz_mask`).** `mask_ifload` and `mask_early` print the same wrong counts at -O3 and at -O1. Partial masks are not deterministic over 3 runs. n=32 is.
+
+| n | Stored results that differ (`mask_ifload` and `mask_early`) | Deterministic over 3 runs |
+|---:|---|---|
+| 8 | 64 of 64 | no |
+| 16 | 128 of 128 | no |
+| 20 | 144 of 160 | no |
+| 31 | 23 of 248 | no |
+| 32 | 0 of 256 | yes |
+
+`mask_sink` stores 0 wrong at all five n, deterministic yes, at both opts. `mask_select`, `mask_uniform`, and `mask_loop_uniform` are PASS, 0 of 256 wrong. `mask_loop_perlane` is INFO: lanes 0-15 differ from "all lanes run 2" in 126 of 128, and lanes 16-31 equal the two-lane-group stale result in 128 of 128. `mask_asm_rule` is PASS for all 7 EXEC masks (off lanes are written: 0, 128, 128, 128, 192, 248, and 256).
+
+**Deliberate breaks (the checker PASSes because the probes print FAIL).**
+
+| Break | What the log printed |
+|---|---|
+| `hazard_asm_no_vnop` judged as if it must be right | FAIL, 64 of 256. Band `break-reports-FAIL`: PASS |
+| `mask_asm_rule_break`, full EXEC `0xffffffff` | PASS, 0 of 256 differ; off lanes written 0 of 0 |
+| six partial EXEC masks, including `0x00000000` | FAIL. Off lanes written 128, 128, 128, 192, 248, and 256 of those widths. The band line is "6 of 7 FAIL", and that band PASSes |
+
+### Check 3 hardware follow-up (16-wave `multi`, event times saved, MEASURED; display hypothesis UNCONFIRMED)
+
+Folder `afk-r13/slot1-results/multipause/`. Started 2026-11-26T12:51:06Z, same ROCm 10.2 clang `bdc35841`. SHA256 match. The chance-control self-test PASSed (independent data fails the check, synchronised data passes, the same-offset break reproduces, 32-bit wrap is handled). The band-checker self-test also PASSed. Hotspot 30 C at the start. `kernel-faults.txt`: no amdgpu fault lines since 2026-11-26 04:51:11.
+
+Three runs, each 16 waves on shader engines 0, 1, 2, and 3, each about 0.500 s:
+
+| Run | Exit | Events per wave (min, median, max) | Run length | Ticks | Pairs | `multi_chance` |
+|---|---:|---|---|---:|---:|---|
+| 1 | 0 | 0, 0, 0 | 0.500 s | 49999965 | 0 | FAIL |
+| 2 | 0 | 0, 0, 0 | 0.500 s | 49999973 | 0 | FAIL |
+| 3 | 0 | 0, 0, 0 | 0.500 s | 49999961 | 0 | FAIL |
+
+Each `runN-multi-events.csv` is the header only (`wave,se,rt_ticks,start_us,dur_us,extra_cycles,hw_changed`). `run1.log` has 16 `RESULT multi` lines, waves 0-15, `events=0`, and `raw_events_written=yes`. Its own verdict is `VERDICT sched_share multi: PASS`. Same-engine and different-engine medians are `nan` because there are 0 pairs. The analytic chance line is about 0.0000. `multi_chance` FAILs because a PASS needs the real share to beat the shuffled upper bound by more than 0.5, and there is nothing to compare. The same-offset break still PASSes (it matches the circular real medians, which are also empty).
+
+The historical event-count bands FAIL on these three runs, and the summary ends `SOMETHING FAILED` for that reason. The bands expect 150 to 260 events per wave (the earlier logged runs were 188 to 227) and same-engine / different-engine medians in 0.93-0.99 / 0.90-0.98. Zero events is outside those bands. That is the measurement. It is not a detector crash: the detector's verdict line is PASS, and the event file was written.
+
+**Displays (READ, not a file in `multipause/`).** The slot run sheet's 05:05 PST note says both connected outputs, `card1-DP-1` and `card2-HDMI-A-2`, were `enabled=disabled` and `dpms=Off` during this unattended run. The manifest at 12:51:01Z lists those two connectors as `connected` and does not record DPMS. Display-pipeline or DPMS activity was therefore a candidate for the pauses this repository reports at 380 to 1,023 per second; the same-session A/B check immediately below tests it directly.
+
+### Check 3 displays-on vs displays-off A/B follow-up (2026-11-26, same boot and binary, MEASURED)
+
+Folders `kimi-next/multipause-displays-on/` (started 2026-11-26T19:58:36Z) and `kimi-next/multipause-displays-off-ab/` (started 2026-11-26T20:01:12Z) in the companion checkout's git-ignored build tree. Same RX 9070 XT (`1002:7550`, LACT track `overclock`, Linux 7.3.4-202), same ROCm 10.2 binary (`r102-sched_share_dump`, SHA256SUMS PASS), same `slot1_bands.py` and `multi_chance.py` self-tests PASS. Both runs recorded `/sys/class/drm/card*-*/{status,enabled,dpms}` before and after the run in `dpms.txt`, and `env-manifest.json` before launch. Both kernel-log fault checks were clean (0 amdgpu faults).
+
+The displays were active (`card1-DP-1` and `card2-HDMI-A-2`: `enabled=enabled`, `dpms=On`) at the start of the first run (19:58:36Z); the desktop screensaver blanked both outputs to `enabled=disabled`, `dpms=Off` between run 3 (20:00:03Z) and the post-run snapshot (20:00:42Z). The second run started 30 seconds later (20:01:12Z) with both outputs `dpms=Off` before and after.
+
+| Run | UTC start | `card1-DP-1` & `card2-HDMI-A-2` DPMS | Hotspot start | Events/wave in 0.500 s (min / med / max) | Real ±1 us median (same SE / diff SE) | 1,000-shuffle mean & 95 % range (same SE / diff SE) | Same-offset break | `multi_chance` |
+|---|---|---|---|---|---|---|---|---|
+| Displays-on 1 | 19:58:40Z | `On` (pre) | 44 C | 667 / **683** / 708 | **95.70 % / 95.71 %** | 0.23 % (0.15-0.30 %) / 0.24 % (0.15-0.29 %) | PASS | **PASS** |
+| Displays-on 2 | 19:59:21Z | `On` | ~44 C | 1,006 / **1,029** / 1,052 | **97.46 % / 97.42 %** | 0.27 % (0.19-0.39 %) / 0.27 % (0.20-0.34 %) | PASS | **PASS** |
+| Displays-on 3 | 20:00:03Z | `On` (Off by 20:00:42Z) | ~44 C | 756 / **776** / 804 | **96.50 % / 96.77 %** | 0.26 % (0.13-0.38 %) / 0.26 % (0.25-0.26 %) | PASS | **PASS** |
+| Displays-off 1 | 20:01:15Z | `Off` (pre & post) | 37 C | **0 / 0 / 0** | `nan` (0 pairs) | n/a | PASS | FAIL (0 events) |
+| Displays-off 2 | 20:01:55Z | `Off` (pre & post) | ~37 C | **0 / 0 / 0** | `nan` (0 pairs) | n/a | PASS | FAIL (0 events) |
+| Displays-off 3 | 20:02:35Z | `Off` (pre & post) | ~37 C | **0 / 0 / 0** | `nan` (0 pairs) | n/a | PASS | FAIL (0 events) |
+
+Raw-event details (MEASURED from `run{1,2,3}-multi-events.csv` in `multipause-displays-on/`):
+- **Total event rows across 16 waves (4 SEs):** 10,948 (run 1), 16,468 (run 2), 12,496 (run 3). **`hw_changed=0` on every row** (waves stalled in place without migration).
+- **Single-event duration (`dur_us`):** median 1.44 / 0.56 / 0.64 us, p90 5.08 / 4.52 / 3.28 us, max 20.20 / 19.08 / 154.00 us. Total stalled time per 0.500 s window: 1.45 / 1.50 / 1.20 ms (0.24 % to 0.30 % of wall time).
+- **Inter-event spacing on wave 0:** bimodal, with tight bursts under 50 us apart (298 / 487 / 374 gaps) separated by 0.5 to 2.9 ms intervals (max gap 2.27 / 2.89 / 2.83 ms; zero gaps above 5 ms).
+- **Band note:** `slot1_bands.py` printed `BAND steps-3.5M: FAIL` in both the displays-on and displays-off runs because 15 of 16 waves ran ~3.34M to 3.35M spin steps in 0.500 s while one wave reached the 3,500,000-step buffer cap; in the displays-on runs `events-per-wave` also printed `WARN` (667-1,052 against the quieter historical 150-260 band). `VERDICT sched_share multi: PASS` held on all 6 runs.
+
+**Conclusion (MEASURED):** This closes Check 3's open 16-wave chance control (95.70 % to 97.46 % real coincidence within ±1 us across all 4 shader engines against a 1,000-shuffle chance upper bound of 0.30 % to 0.39 %, roughly 350x to 400x above chance) and gives a same-boot, same-binary, 60-second-apart A/B confirmation that active display DPMS causes the card-wide pauses on this card and driver stack. Which display-pipeline mechanism (scanout, DCN/MCLK switching, or compositor frames) triggers them inside the active-DPMS state was not isolated here.

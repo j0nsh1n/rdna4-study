@@ -1,0 +1,128 @@
+#version 450
+// Round 13 Probe B: Texture sampling throughput compute shader.
+// Compile 3 variants:
+//   -DOP_MODE=0  texelFetch    (point integer fetch -> image_load)
+//   -DOP_MODE=1  textureLod    (bilinear filtered, lod=0 -> image_sample_lz / image_sample_l)
+//   -DOP_MODE=2  textureGather (component 0 2x2 gather -> image_gather4_lz / image_gather4)
+#extension GL_ARB_shader_clock : require
+#extension GL_EXT_shader_realtime_clock : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x_id = 0) in;
+
+#ifndef OP_MODE
+#define OP_MODE 1
+#endif
+
+layout(push_constant) uniform PC {
+    uint w;
+    uint h;
+    uint mask_x;
+    uint mask_y;
+    uint strips_x_mask;
+    uint strips_x_shift;
+    uint tiles_y_mask;
+    uint y_tile_step;
+    uint iters;
+    uint break_dx;
+    uint out_stride_wg;
+    uint strip_tiles;
+    float inv_w;
+    float inv_h;
+    float du;
+    float dv;
+} pc;
+
+layout(set = 0, binding = 0) uniform sampler2D u_tex;
+layout(set = 0, binding = 1) coherent buffer OutBuf { vec4 out_v[]; };
+
+void main() {
+    uint lid = gl_LocalInvocationIndex;
+    uint lane = lid & 31u;
+    uint sub = lid >> 5u;
+    uint lx = (lane & 7u) + ((sub & 1u) << 3u);
+    uint ly = ((lane >> 3u) & 3u) + ((sub >> 1u) << 2u);
+
+    uint wgid = gl_WorkGroupID.x;
+    uint wg_tx = (wgid & pc.strips_x_mask) * pc.strip_tiles;
+    uint wg_ty = (wgid >> pc.strips_x_shift) & pc.tiles_y_mask;
+
+    uint bx0 = ((wg_tx << 4u) + lx + pc.break_dx) & pc.mask_x;
+    uint by = ((wg_ty << 4u) + ly) & pc.mask_y;
+
+    uint out_wg = pc.out_stride_wg & 0xffu;
+    uint clk_slots = (pc.out_stride_wg >> 8u) & 0xfffu;
+    uint clk_shift = (pc.out_stride_wg >> 20u) & 0x1fu;
+    uint clk_mask = (1u << clk_shift) - 1u;
+    uint clk_slot = wgid >> clk_shift;
+    bool record_clk = (clk_slots != 0u) && (lid == 0u) && ((wgid & clk_mask) == 0u) && (clk_slot < clk_slots);
+
+    uint64_t clk_c0 = uint64_t(0);
+    uint64_t clk_r0 = uint64_t(0);
+    if (record_clk) {
+        clk_c0 = clockARB();
+        clk_r0 = clockRealtimeEXT();
+    }
+
+    vec4 acc = vec4(0.0);
+#if OP_MODE == 0
+#define ONE_TAP                                                  \
+    acc += texelFetch(u_tex, ivec2(int(ix), int(by)), 0);        \
+    ix = (ix + 16u) & pc.mask_x;
+    for (uint it = 0u; it < pc.iters; ++it) {
+        uint ix = bx0;
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        by = (by + (pc.y_tile_step << 4u)) & pc.mask_y;
+    }
+#undef ONE_TAP
+#else
+    float u0 = (float(bx0) + 0.75) * pc.inv_w;
+    float v = (float(by) + 1.0) * pc.inv_h;
+#if OP_MODE == 1
+#define ONE_TAP                                                  \
+    acc += textureLod(u_tex, vec2(fract(u), fv), 0.0);           \
+    u += pc.du;
+#else
+#define ONE_TAP                                                  \
+    acc += textureGather(u_tex, vec2(fract(u), fv), 0);          \
+    u += pc.du;
+#endif
+    for (uint it = 0u; it < pc.iters; ++it) {
+        float u = u0;
+        float fv = fract(v);
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        ONE_TAP ONE_TAP ONE_TAP ONE_TAP
+        v += pc.dv;
+    }
+#undef ONE_TAP
+#endif
+
+    // Write only the first `out_wg` workgroups' full invocations to keep output buffer small,
+    // while keeping `acc` live for every thread via conditional guard.
+    if (wgid < out_wg) {
+        out_v[wgid * 256u + lid] = acc;
+    } else if (acc.x == -99999.0) {
+        out_v[0] = acc;
+    }
+
+    if (record_clk) {
+        // Store loop-dependent acc, issue buffer memory barrier, and reload it before reading
+        // end clocks inside a dependent branch so SPIR-V/NIR/ACO cannot reorder the end clock
+        // reads ahead of the loop.
+        uint cidx = out_wg * 256u + clk_slot;
+        out_v[cidx] = acc;
+        memoryBarrierBuffer();
+        vec4 dep = out_v[cidx];
+        if (dep.x != -99999.0) {
+            uint64_t dc = clockARB() - clk_c0;
+            uint64_t dr = clockRealtimeEXT() - clk_r0;
+            out_v[cidx] = uintBitsToFloat(uvec4(
+                uint(dc), uint(dc >> uint64_t(32)),
+                uint(dr), uint(dr >> uint64_t(32))));
+        }
+    }
+}

@@ -1,0 +1,95 @@
+#version 450
+// Round 13 Probe P4 (vk_async): Integer SAD-like ALU compute job.
+// NOTE: GLSL / SPIR-V has no msad4 / v_msad_u8 instruction (unlike HLSL msad4 or HIP
+// __builtin_amdgcn_msad_u8; VK_KHR_shader_integer_dot_product covers dot products only).
+// This shader therefore executes an explicit 4-byte integer SAD (max(a,b) - min(a,b) across
+// 4 unpacked bytes, accumulated into 4 independent uint32 chains) to saturate integer VALU
+// without floating-point operations.
+layout(local_size_x_id = 0) in;
+
+layout(push_constant) uniform PC {
+    uint iters;
+    uint pass_idx;
+    uint out_stride_wg;
+    uint break_mask;
+} pc;
+
+// Output: 1 uint per checked invocation (first out_stride_wg workgroups).
+layout(set = 0, binding = 1) buffer OutBuf { uint out_u[]; };
+// Per-lane runtime inputs (256 uvec4 entries): (a0, b0, inc0, inc1).
+layout(set = 0, binding = 2) readonly buffer InBuf { uvec4 in_u[]; };
+
+uint sad4(uint x, uint y) {
+    uint x0 = x & 0xffu;
+    uint y0 = y & 0xffu;
+    uint x1 = (x >> 8u) & 0xffu;
+    uint y1 = (y >> 8u) & 0xffu;
+    uint x2 = (x >> 16u) & 0xffu;
+    uint y2 = (y >> 16u) & 0xffu;
+    uint x3 = (x >> 24u) & 0xffu;
+    uint y3 = (y >> 24u) & 0xffu;
+    uint d0 = max(x0, y0) - min(x0, y0);
+    uint d1 = max(x1, y1) - min(x1, y1);
+    uint d2 = max(x2, y2) - min(x2, y2);
+    uint d3 = max(x3, y3) - min(x3, y3);
+    return d0 + d1 + d2 + d3;
+}
+
+#define SAD_STEP(acc, vx, vy, ix, iy) \
+    acc += sad4(vx, vy);              \
+    vx += ix;                         \
+    vy += iy;
+
+void main() {
+    uint lid = gl_LocalInvocationIndex;
+    uint wgid = gl_WorkGroupID.x;
+    uvec4 kv = in_u[lid];
+
+    uint salt = (wgid * 0x9e3779b9u) ^ (pc.pass_idx * 0x7f4a7c15u) ^ pc.break_mask;
+    uint x0 = kv.x ^ salt;
+    uint y0 = kv.y ^ (salt << 1u);
+    uint x1 = (kv.x + 0x13579bdfu) ^ salt;
+    uint y1 = (kv.y + 0x2468ace0u) ^ (salt >> 1u);
+    uint x2 = (kv.x ^ 0x55aa33ccu) + salt;
+    uint y2 = (kv.y ^ 0xaa55cc33u) + salt;
+    uint x3 = (kv.x + 0x31415927u) ^ (salt << 3u);
+    uint y3 = (kv.y + 0x27182819u) ^ (salt >> 3u);
+
+    uint inc0 = kv.z;
+    uint inc1 = kv.w;
+
+    uint s0 = 0u, s1 = 0u, s2 = 0u, s3 = 0u;
+    for (uint it = 0u; it < pc.iters; ++it) {
+        SAD_STEP(s0, x0, y0, inc0, inc1)
+        SAD_STEP(s1, x1, y1, inc0, inc1)
+        SAD_STEP(s2, x2, y2, inc0, inc1)
+        SAD_STEP(s3, x3, y3, inc0, inc1)
+
+        SAD_STEP(s0, x0, y0, inc0, inc1)
+        SAD_STEP(s1, x1, y1, inc0, inc1)
+        SAD_STEP(s2, x2, y2, inc0, inc1)
+        SAD_STEP(s3, x3, y3, inc0, inc1)
+
+        SAD_STEP(s0, x0, y0, inc0, inc1)
+        SAD_STEP(s1, x1, y1, inc0, inc1)
+        SAD_STEP(s2, x2, y2, inc0, inc1)
+        SAD_STEP(s3, x3, y3, inc0, inc1)
+
+        SAD_STEP(s0, x0, y0, inc0, inc1)
+        SAD_STEP(s1, x1, y1, inc0, inc1)
+        SAD_STEP(s2, x2, y2, inc0, inc1)
+        SAD_STEP(s3, x3, y3, inc0, inc1)
+    }
+
+    uint total = s0 + s1 + s2 + s3;
+    if (wgid < pc.out_stride_wg) {
+        uint idx = wgid * 256u + lid;
+        if (pc.pass_idx == 0u) {
+            out_u[idx] = total;
+        } else {
+            out_u[idx] = out_u[idx] + total;
+        }
+    } else if (total == 0xffffffffu) {
+        out_u[0] = total;
+    }
+}

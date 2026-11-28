@@ -1,0 +1,319 @@
+#version 450
+// Round 13 Probe C: Texture sampling interleaved with packed FP16 (f16vec2 -> v_pk_fma_f16)
+// or FP32 (float -> v_fma_f32 / v_fmac_f32 / v_dual_fmac_f32) FMA chains of adjustable length.
+//
+// Compile macros:
+//   -DUSE_FP16=1|0       1 = f16vec2 packed FP16 FMAs, 0 = scalar FP32 FMAs
+//   -DDO_TEX=1|0         1 = textureLod interleaved with FMAs, 0 = pure ALU baseline
+//   -DFMA_PER_TEX=N      0, 2, 4, 8, 16, 32, or 64 FMAs interleaved after each of 4 texture taps
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_ARB_shader_clock : require
+#extension GL_EXT_shader_realtime_clock : require
+
+layout(local_size_x_id = 0) in;
+
+#ifndef USE_FP16
+#define USE_FP16 1
+#endif
+#ifndef DO_TEX
+#define DO_TEX 1
+#endif
+#ifndef FMA_PER_TEX
+#define FMA_PER_TEX 8
+#endif
+
+layout(push_constant) uniform PC {
+    uint w;
+    uint h;
+    uint mask_x;
+    uint mask_y;
+    uint strips_x_mask;
+    uint strips_x_shift;
+    uint tiles_y_mask;
+    uint y_tile_step;
+    uint iters;
+    uint break_dx;
+    uint out_stride_wg;
+    uint strip_tiles;
+    float inv_w;
+    float inv_h;
+    float du;
+    float dv;
+} pc;
+
+layout(set = 0, binding = 0) uniform sampler2D u_tex;
+// Output layout: 2 vec4 per checked invocation: [0] = acc_tex, [1] = vec4(alu_lo, alu_hi, 0, 0).
+layout(set = 0, binding = 1) coherent buffer OutBuf { vec4 out_v[]; };
+// Per-lane constants (256 entries, 4 floats each): (mk_lo, mk_hi, ak_lo, ak_hi).
+layout(set = 0, binding = 2) readonly buffer ConstBuf { vec4 kbuf[]; };
+
+#if USE_FP16
+#define FMA_T f16vec2
+#else
+#define FMA_T float
+#endif
+
+// Unrolled FMA burst macros (5 independent chains a0..a4 to match 5-cycle VALU latency and keep
+// odd/even oscillation parity non-trivial across all power-of-2 FMA_PER_TEX counts).
+#define FMA_STEP(c) a##c = fma(a##c, mk, ak);
+
+#define FMA_BURST_0
+#define FMA_BURST_2  FMA_STEP(0) FMA_STEP(1)
+#define FMA_BURST_4  FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+#define FMA_BURST_8  FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+#define FMA_BURST_16 FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) \
+                     FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) \
+                     FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+
+// Note: for consistent round-robin indexing across all 4 taps in an outer iteration, emit
+// exact sequence s = 0 .. (4 * FMA_PER_TEX - 1) mapped to chain (s % 5).
+#define T_TEX(u_expr) acc_tex += textureLod(u_tex, vec2(fract(u_expr), fv), 0.0);
+
+void main() {
+    uint lid = gl_LocalInvocationIndex;
+    uint lane = lid & 31u;
+    uint sub = lid >> 5u;
+    uint lx = (lane & 7u) + ((sub & 1u) << 3u);
+    uint ly = ((lane >> 3u) & 3u) + ((sub >> 1u) << 2u);
+
+    uint wgid = gl_WorkGroupID.x;
+    uint wg_tx = (wgid & pc.strips_x_mask) * pc.strip_tiles;
+    uint wg_ty = (wgid >> pc.strips_x_shift) & pc.tiles_y_mask;
+
+    uint bx0 = ((wg_tx << 4u) + lx + pc.break_dx) & pc.mask_x;
+    uint by = ((wg_ty << 4u) + ly) & pc.mask_y;
+
+    vec4 kv = kbuf[lid];
+#if USE_FP16
+    f16vec2 mk = f16vec2(float16_t(kv.x), float16_t(kv.y));
+    f16vec2 ak = f16vec2(float16_t(kv.z), float16_t(kv.w));
+    f16vec2 a0 = f16vec2(0.25hf, 0.5hf);
+    f16vec2 a1 = f16vec2(0.375hf, 0.625hf);
+    f16vec2 a2 = f16vec2(0.5hf, 0.75hf);
+    f16vec2 a3 = f16vec2(0.625hf, 0.875hf);
+    f16vec2 a4 = f16vec2(0.75hf, 1.0hf);
+#else
+    float mk = kv.x;
+    float ak = kv.z;
+    float a0 = 0.25;
+    float a1 = 0.375;
+    float a2 = 0.5;
+    float a3 = 0.625;
+    float a4 = 0.75;
+#endif
+
+    uint out_wg = pc.out_stride_wg & 0xffu;
+    uint clk_slots = (pc.out_stride_wg >> 8u) & 0xfffu;
+    uint clk_shift = (pc.out_stride_wg >> 20u) & 0x1fu;
+    uint clk_mask = (1u << clk_shift) - 1u;
+    uint clk_slot = wgid >> clk_shift;
+    bool record_clk = (clk_slots != 0u) && (lid == 0u) && ((wgid & clk_mask) == 0u) && (clk_slot < clk_slots);
+
+    uint64_t clk_c0 = uint64_t(0);
+    uint64_t clk_r0 = uint64_t(0);
+    if (record_clk) {
+        clk_c0 = clockARB();
+        clk_r0 = clockRealtimeEXT();
+    }
+
+    vec4 acc_tex = vec4(0.0);
+    float u0 = (float(bx0) + 0.75) * pc.inv_w;
+    float v = (float(by) + 1.0) * pc.inv_h;
+
+    for (uint it = 0u; it < pc.iters; ++it) {
+        float u = u0;
+        float fv = fract(v);
+
+        // Tap 0
+#if DO_TEX
+        T_TEX(u);
+        u += pc.du;
+#endif
+#if FMA_PER_TEX == 2
+        FMA_STEP(0) FMA_STEP(1)
+#elif FMA_PER_TEX == 4
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+#elif FMA_PER_TEX == 8
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+#elif FMA_PER_TEX == 16
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+#elif FMA_PER_TEX == 32
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+#elif FMA_PER_TEX == 64
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+#endif
+
+        // Tap 1
+#if DO_TEX
+        T_TEX(u);
+        u += pc.du;
+#endif
+#if FMA_PER_TEX == 2
+        FMA_STEP(2) FMA_STEP(3)
+#elif FMA_PER_TEX == 4
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+#elif FMA_PER_TEX == 8
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+#elif FMA_PER_TEX == 16
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+#elif FMA_PER_TEX == 32
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+#elif FMA_PER_TEX == 64
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+#endif
+
+        // Tap 2
+#if DO_TEX
+        T_TEX(u);
+        u += pc.du;
+#endif
+#if FMA_PER_TEX == 2
+        FMA_STEP(4) FMA_STEP(0)
+#elif FMA_PER_TEX == 4
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+#elif FMA_PER_TEX == 8
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+#elif FMA_PER_TEX == 16
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+#elif FMA_PER_TEX == 32
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+#elif FMA_PER_TEX == 64
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+#endif
+
+        // Tap 3
+#if DO_TEX
+        T_TEX(u);
+#endif
+#if FMA_PER_TEX == 2
+        FMA_STEP(1) FMA_STEP(2)
+#elif FMA_PER_TEX == 4
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+#elif FMA_PER_TEX == 8
+        FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+#elif FMA_PER_TEX == 16
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+        FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3)
+#elif FMA_PER_TEX == 32
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+        FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2)
+#elif FMA_PER_TEX == 64
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1)
+        FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4) FMA_STEP(0)
+#endif
+
+        v += pc.dv;
+    }
+
+#if FMA_PER_TEX > 0
+    // Force an odd total step count on every chain when pc.iters is even (e.g. visit-once DRAM
+    // or vk_async N=1) so the period-2 oscillating FMA sum never collapses back to the init vector.
+    if (pc.iters > 0u && (pc.iters & 1u) == 0u) {
+        FMA_STEP(0) FMA_STEP(1) FMA_STEP(2) FMA_STEP(3) FMA_STEP(4)
+    }
+#endif
+
+#if USE_FP16
+    vec2 asum = vec2(a0) + vec2(a1) + vec2(a2) + vec2(a3) + vec2(a4);
+    vec4 alu_out = vec4(asum.x, asum.y, 0.0, 0.0);
+#else
+    float asum = a0 + a1 + a2 + a3 + a4;
+    vec4 alu_out = vec4(asum, 0.0, 0.0, 0.0);
+#endif
+
+    if (wgid < out_wg) {
+        uint idx = (wgid * 256u + lid) * 2u;
+        out_v[idx + 0u] = acc_tex;
+        out_v[idx + 1u] = alu_out;
+    } else if (acc_tex.x == -99999.0 && alu_out.x == -99999.0) {
+        out_v[0] = acc_tex + alu_out;
+    }
+
+    if (record_clk) {
+        // Store loop-dependent (acc_tex + alu_out), issue buffer memory barrier, and reload it
+        // before reading end clocks inside a dependent branch so SPIR-V/NIR/ACO cannot reorder
+        // the end clock reads ahead of the loop.
+        uint cidx = out_wg * 256u * 2u + clk_slot;
+        out_v[cidx] = acc_tex + alu_out;
+        memoryBarrierBuffer();
+        vec4 dep = out_v[cidx];
+        if (dep.x != -99999.0) {
+            uint64_t dc = clockARB() - clk_c0;
+            uint64_t dr = clockRealtimeEXT() - clk_r0;
+            out_v[cidx] = uintBitsToFloat(uvec4(
+                uint(dc), uint(dc >> uint64_t(32)),
+                uint(dr), uint(dr >> uint64_t(32))));
+        }
+    }
+}

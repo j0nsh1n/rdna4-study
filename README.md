@@ -130,6 +130,23 @@ Wall-clock rates describe this card in the named configuration, not a stock card
   - True clumping saved `7–11%` card-wide and `22–37%` single-wave.
   - Source: [blindspot-followups.md](measurements/blindspot-followups.md).
 
+#### SAD/MSAD instructions, texture sampling, and FP16 beside texture fetches (Round 13)
+
+- **SAD and MSAD instructions run at full 32-lane vector rate with 5-cycle latency and no FMA co-issue.**
+  - All four tested instructions (`v_msad_u8`, `v_sad_u8`, `v_sad_u16`, `v_sad_hi_u8`) were bit-exact with 5.000-cycle dependent latency.
+  - They issued at 1.000 cycle per op in wave32 and 2.000 in wave64 (not quarter-rate), and never co-issued with FP32 FMA.
+  - Source: [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+- **L0 texture filtering hits 4 samples per clock per CU, unfiltered fetches double that rate, and visit-once DRAM textures saturate the 1408 MHz bus while structured floats show DCC compression.**
+  - At L0 on the post-review Slot 5 rerun (overclocked card, unpinned clocks; earlier Slot 4 withdrawn), `1–8 B` `textureLod` and `textureGather` reached 3.50 to 4.27 samples/clk/CU (`RGBA16F` full-rate, `RGBA32F` halved with `1.88–1.93x` single-channel gather recovery), while unfiltered `texelFetch` reached 6.19 to 7.46/clk/CU (11.01 to 11.04 TB/s for RGBA16F; the 16-byte RGBA32F fetch reaches 10.09 to 11.57 TB/s at about half that rate).
+  - On visit-once 512 MiB DRAM at 1408 MHz (720.90 GB/s bus ceiling), incompressible `RGBA8` (660.0 to 707.1 GB/s), `B10G11R11` (654.1 to 707.5 GB/s), and `R8` (`texelFetch` 700.0 to 705.6 GB/s) reached 90.7 to 98.1% of peak.
+  - 7-bit dyadic float textures exceeded that ceiling in most cells: FP16 746.1 to 806.4 GB/s (3 of 12 cells stayed below, at 692.7 to 714.5) and FP32 833.3 to 1,159.8 GB/s (all 6 cells), isolating hardware DCC compression (INFERRED).
+  - Unpinned short L0/L2/MALL bursts had `SPREAD>10%` on 95/108 cells and `96 MHz` memory clock on 102/108 cells (affecting lower-tier `tex` traffic; every DRAM cell ran at 1408 MHz).
+  - Source: [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+- **Packed FP16 math hides completely behind DRAM texture fetches.**
+  - On the post-review Slot 5 rerun (overclocked card, unpinned clocks; earlier Slot 4 withdrawn), standalone `v_pk_fma_f16` reached 50.0 to 51.2 TFLOPS (60.9 to 62.3 inst/clk/CU), and interleaved runs hid up to all 64 FMAs per tap behind visit-once DRAM fetches (`vs_max` 0.999 to 1.053 across `RGBA8` 535.6 to 581.7 GB/s and `RGBA16F` 769.6 to 798.7 GB/s at 1408 MHz).
+  - Clock-matched L0 and L2 cells stayed around 0.96 to 1.37 of `max(T_tex, T_alu)` (`1.54` peak on `RGBA8 L2 fp32 w32 N=16`; two unpinned `N=0` clock drops pulled `vs_max` to 0.63 to 0.78, and 110/112 L0/L2 cells ran at `96 MHz` memory clock).
+  - Source: [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+
 #### Shared-memory latency and bandwidth
 
 - **Shared memory answers 2.5 times faster than the first-level cache.**
@@ -236,6 +253,14 @@ Wall-clock rates describe this card in the named configuration, not a stock card
   - Round 12 closed five hardware blind spots and refined four of them; its 2026-11-27 fix-pass rerun had 0 faults.
   - Source: [blindspot-followups.md](measurements/blindspot-followups.md).
 
+#### Vulkan async compute beside saturated graphics (Round 13)
+
+- **All-Vulkan async compute also starves under saturated graphics, and high global queue priority requires root.**
+  - On RADV's dedicated compute queue family (`qf=1`, 4 queues), unprivileged `VK_KHR_global_priority` allows `LOW` and `MEDIUM` and refuses `HIGH` and `REALTIME` (`VK_ERROR_NOT_PERMITTED`).
+  - On the equal-work post-review Slot 7 rerun (95 C owner hotspot stop, peak 90 C, 0 faults; earlier Slot 3 withdrawn; Slot 5 `vk_async` and Slot 6 were 90 C thermal stops), `SAT-100` 80-dispatch chains hit the 33-frame graphics burst cap on all 16/16 cells (`119.6 to 133.3 ms`, `10.78 to 37.27x` vs alone, hotspot 87 to 90 C) across FP16, SAD, texture, and streaming workloads at both allowed priorities while graphics stayed at 1.05 to 1.12x (`3.52 to 3.76 ms`), mirroring Round 12's HIP starvation and pointing to hardware or firmware queue arbitration (INFERRED).
+  - Unpinned clocks confound exact slowdown ratios on this overclocked, raised-power-limit card: `SAT-100` `N=1` arms ran near 1.9 GHz while `N=80` arms ran near 3.2 GHz, and memory clock sat at `96 MHz` in 5/8 compute-alone and 46/64 arm lines (`stream` dropped from 1408 MHz alone to 434 to 875 MHz overlapped, affecting `stream` and `tex`).
+  - Source: [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+
 #### Profiler counters and timestamp artifacts
 
 - **`rocprofv3` counter availability depends on the power state, not the ROCm version, and small reported kernel overlaps are timestamp artifacts in the probe.**
@@ -340,6 +365,25 @@ Wall-clock rates describe this card in the named configuration, not a stock card
   - Timestamp queries may perturb scheduling, and the core clock was unverified.
   - Source: [round8.md](measurements/round8.md).
 
+#### AMD FidelityFX suite: compiled code, FSR 4 without matrix units, frame generation, Ray Regeneration (Round 13)
+
+- **AMD's open analytic frame generation compiles to zero FP16 instructions on RADV/ACO, while classic FidelityFX filters pack heavily into FP16.**
+  - Across all 76 compiled pipelines for FSR 3.1 Optical Flow and Frame Interpolation, static FP16 share is 0.0% even when forced with `-DFFX_HALF=1`, and `optical_flow_v5` compiles to 1,365 to 1,372 INT32 ops (78.1%) with zero `v_msad_u8` because the GLSL header omits `msad4`.
+  - Classic MIT filters (`CAS` up to 72.7%, `FSR 1` up to 72.0%, `LPM` 63.3 to 63.8%) pack heavily into `v_pk_*_f16`, while FSR 3.1 upscaling uses FP16 only in `accumulate` (7.9 to 8.8%).
+  - Sources: [round13-mit-stats.md](measurements/round13-mit-stats.md), [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+- **Disabling cooperative-matrix and FP8 slows FSR 4.1.2 by 1.5 to 2.0x, while analytic FSR 3.1.6 upscaling runs 1.58 to 1.88x faster than FSR 4.1.2 FP8.**
+  - At Quality preset, FSR 4.1.2 without cooperative-matrix and FP8 took 0.694 to 0.696, 1.087 to 1.088, and 2.523 to 2.526 ms at 1080p, 1440p, and 4K (2.05x, 1.67x, and 1.51x slower than FP8; INFERRED INT8 path).
+  - Analytic FSR 3.1.6 took 0.218 to 0.219, 0.370 to 0.371, and 0.882 to 0.886 ms against FSR 4.1.2 FP8's 0.342 to 0.346, 0.649 to 0.652, and 1.658 to 1.665 ms.
+  - Source: [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+- **ML Frame Generation 4.0.2 costs 1.37 to 1.71x more async-compute GPU time than analytic 3.1.6 while cutting persistent VRAM by 1.9 to 3.9x.**
+  - The ML path ran in a disposable copy of the game prefix set to report Windows 11 (setup steps not published), activating ML FG 4.0.2 (INFERRED from combined outside-view signals after a post-trial proof-gate widening), with async compute (`0x021c` p50) costing 0.548, 0.834, and 1.546 ms at 1080p, 1440p, and 4K against analytic 3.1.6's 0.320, 0.548, and 1.127 ms at 3,170 to 3,199 MHz.
+  - Persistent frame-generation VRAM fell from 67.8, 117.2, and 249.9 MB (analytic, 36% aliasable) to 35.1, 43.3, and 64.2 MB (ML, 60 to 65% aliasable).
+  - Source: [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+- **Uncapped Ray Regeneration 1.2.0 and Radiance Caching 0.9.0 run fault-free on WMMA, while non-WMMA Radiance Caching fails pipeline creation.**
+  - Uncapped Ray Regeneration 1.2.0 (1080p display, 960x540 render, 393.375 MB VRAM) ran at 3.058 ms/frame (327.0 FPS) with `FSR Ray Regeneration` taking 1.140 ms at 3,165 MHz, matching AMD's 1.12 ms published figure.
+  - Radiance Caching 0.9.0 at 720p ran at 3.730 to 3.750 ms/frame (266.7 to 268.1 FPS) on WMMA, whereas disabling WMMA failed Vulkan compute pipeline creation (`hr 0x80070057`, 0 frames).
+  - Source: [round13-ffx-suite.md](measurements/round13-ffx-suite.md).
+
 ### Figures
 
 All figures are generated reproducibly by `scripts/make_figures.py` using values transcribed from the committed measurement tables (PNG + SVG in `figures/`).
@@ -406,10 +450,10 @@ Early in the study, a new memory overclock took effect only after the displays b
 | `figures/` | PNG and SVG figures generated reproducibly by `scripts/make_figures.py` from values transcribed from the committed tables. |
 | `measurements/` | Measurement write-ups, expectations written before runs, and `gaming-tables/` with three derived CSV tables. |
 | `notes/` | The study plan, first-hour record, session guide, reading notes on the hardware and software stack, and `notes/plans/` with the matrix-arithmetic test plan. |
-| `scripts/` | One `study-*.sh` entry point per study lane, Python checkers and table builders, expected machine-code patterns, independent replication kit `replicate_top5.sh`, raw-run archiver `archive_runs.py`, and CPU checks `reproduce_nocard.sh` and `env_manifest.py`. `scripts/round5/` through `scripts/round12/` hold the later rounds' wrappers and analysis scripts. |
+| `scripts/` | One `study-*.sh` entry point per study lane, Python checkers and table builders, expected machine-code patterns, independent replication kit `replicate_top5.sh`, raw-run archiver `archive_runs.py`, and CPU checks `reproduce_nocard.sh` and `env_manifest.py`. `scripts/round5/` through `scripts/round13/` hold the later rounds' wrappers and analysis scripts. |
 | `scripts/extcheck/` | CPU-only external-review builders, extractors, scanners, and chance controls. |
 | `scripts/round10/` | Later-round probe tooling, including `pin_mclk.sh` and its `selftest-p0.sh` dry-run suite. |
-| `src/` | HIP probes, Vulkan host programs, and Vulkan shaders. `src/round5/` through `src/round12/` hold the later rounds' probes. |
+| `src/` | HIP probes, Vulkan host programs, and Vulkan shaders. `src/round5/` through `src/round13/` hold the later rounds' probes. |
 | `src/extcheck/` | The standalone `rocjitsu` comparison and RDNA 3 compiler-hazard control source. |
 | Git-ignored directories | `runs/`, `build/`, `toolchains/`, and `sources/` are not committed. Raw run data is not in the repository. |
 
@@ -457,6 +501,8 @@ Two earlier follow-up passes have no separate measurement file; their results ap
 | [gaming-route.md](measurements/gaming-route.md) | An upscaler's neural network on the headless vkd3d-proton, dxil-spirv, and RADV route. |
 | [gaming-probes.md](measurements/gaming-probes.md) | Vulkan and HIP probes of dispatch gaps, queues, bursts, clock steps, and preemption. |
 | [fsr4-predictions.md](measurements/fsr4-predictions.md) | Pre-run outside-view FSR 4 predictions, kept separate from the later measured results. |
+| [round13-ffx-suite.md](measurements/round13-ffx-suite.md) | Round 13 AMD FidelityFX suite inventory, ML vs analytic frame generation, FSR 4.1.2/3.1.6, Ray Regeneration, Radiance Caching, and SAD/MSAD, texture, FP16-beside-texture, and Vulkan async-compute probes. |
+| [round13-mit-stats.md](measurements/round13-mit-stats.md) | Round 13 RADV/ACO compiled-code instruction statistics across 364 pipelines from 12 MIT FidelityFX SDK v1.1.4 components. |
 
 ### LLM workloads
 

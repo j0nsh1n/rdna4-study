@@ -1,0 +1,28 @@
+#version 450
+// Round 13 Probe P4 (vk_async): Deterministic incompressible 128 MiB source buffer initializer.
+// Matches vka_stream_init_vec4() in src/round13/vk_async_ref.h bit-for-bit.
+layout(local_size_x_id = 0) in;
+
+layout(push_constant) uniform PC {
+    uint total_vec4;
+} pc;
+
+layout(set = 0, binding = 1) writeonly buffer OutBuf { uvec4 dst_v[]; };
+
+uint hash32(uint x) {
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    for (uint i = gid; i < pc.total_vec4; i += stride) {
+        uint base = i * 4u;
+        dst_v[i] = uvec4(hash32(base + 0u), hash32(base + 1u), hash32(base + 2u), hash32(base + 3u));
+    }
+}

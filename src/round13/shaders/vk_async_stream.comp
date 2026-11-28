@@ -1,0 +1,42 @@
+#version 450
+// Round 13 Probe P4 (vk_async): Coalesced 128-bit DRAM streaming copy+XOR compute job.
+// Streams 128 MiB src -> 128 MiB dst (256 MiB total > 64 MiB MALL) via 4x unrolled coalesced
+// uvec4 (buffer_load_b128 + buffer_store_b128) accesses.
+layout(local_size_x_id = 0) in;
+
+layout(push_constant) uniform PC {
+    uint base_vec4;    // 0 for N=1; (pass_idx & 3) * 2M for N=80
+    uint chunks;       // 4 for 128 MiB (N=1); 1 for 32 MiB quarter (N=80)
+    uint iters;        // 20 for N=1; 1 for N=80 (equal 5120 MiB = 5.0 GiB total traffic)
+    uint salt;         // per-pass XOR salt
+    uint break_mask;   // 0 normal; 1 in deliberate break
+} pc;
+
+layout(set = 0, binding = 1) writeonly buffer DstBuf { uvec4 dst_v[]; };
+layout(set = 0, binding = 2) readonly buffer SrcBuf { uvec4 src_v[]; };
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;  // 2048 * 256 = 524,288 uvec4 = 8 MiB
+    uint chunk_step = stride * 4u;                          // 2,097,152 uvec4 = 32 MiB
+
+    for (uint it = 0u; it < pc.iters; ++it) {
+        uvec4 svec = uvec4(pc.salt ^ it ^ pc.break_mask);
+        uint base = pc.base_vec4 + tid;
+        for (uint ch = 0u; ch < pc.chunks; ++ch) {
+            uint p0 = base;
+            uint p1 = p0 + stride;
+            uint p2 = p1 + stride;
+            uint p3 = p2 + stride;
+            uvec4 v0 = src_v[p0];
+            uvec4 v1 = src_v[p1];
+            uvec4 v2 = src_v[p2];
+            uvec4 v3 = src_v[p3];
+            dst_v[p0] = v0 ^ svec;
+            dst_v[p1] = v1 ^ svec;
+            dst_v[p2] = v2 ^ svec;
+            dst_v[p3] = v3 ^ svec;
+            base += chunk_step;
+        }
+    }
+}
